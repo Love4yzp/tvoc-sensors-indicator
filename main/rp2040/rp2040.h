@@ -30,37 +30,36 @@ enum pkt_type_cmd
 
 enum pkt_type_data
 {
-	// Inner Sensor
-	// PKT_TYPE_SENSOR_SCD41_TEMP      = 0xB0, // not accurate
-	// PKT_TYPE_SENSOR_SCD41_HUMIDITY = 0xB1,
-	PKT_TYPE_SENSOR_SCD41_CO2 = 0xB2, // float
-
-	// SHT41 AHT
-	PKT_TYPE_SENSOR_SHT41_TEMP = 0xB3,
-	PKT_TYPE_SENSOR_SHT41_HUMIDITY = 0xB4, // float
-	
-	// Inner Sensor SGP40
-	PKT_TYPE_SENSOR_SGP40_TVOC_INDEX = 0xB5, // float
-
-	// Dynamic sensor registry packets.
+	// Dynamic sensor registry (Grove sensors)
 	PKT_TYPE_SENSOR_ATTACHED = 0xB8,
 	PKT_TYPE_SENSOR_DETACHED = 0xB9,
-	PKT_TYPE_SENSOR_VALUE = 0xBA,
+	PKT_TYPE_SENSOR_VALUE    = 0xBA,
 
-	// SEN5x
-	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm1p0 = 0xB6,
-	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm2p5 = 0xB7,
-	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm4p0 = 0xB8,
-	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm10p0 = 0xB9,
-	PKT_TYPE_SENSOR_SEN5X_ambientHumidity = 0xBA,
-	PKT_TYPE_SENSOR_SEN5X_ambientTemperature = 0xBB,
-	PKT_TYPE_SENSOR_SEN5X_vocIndex = 0xBC,
-	PKT_TYPE_SENSOR_SEN5X_noxIndex = 0xBD,
+	// SEN54: PM + humidity + temperature + VOC (replaces all legacy sensors)
+	PKT_TYPE_SENSOR_SEN54_PM1_0       = 0xC0,  // float, µg/m³
+	PKT_TYPE_SENSOR_SEN54_PM2_5       = 0xC1,  // float, µg/m³
+	PKT_TYPE_SENSOR_SEN54_PM4_0       = 0xC2,  // float, µg/m³
+	PKT_TYPE_SENSOR_SEN54_PM10        = 0xC3,  // float, µg/m³
+	PKT_TYPE_SENSOR_SEN54_HUMIDITY    = 0xC4,  // float, %RH
+	PKT_TYPE_SENSOR_SEN54_TEMPERATURE = 0xC5,  // float, °C
+	PKT_TYPE_SENSOR_SEN54_VOC_INDEX   = 0xC6,  // float, VOC index 1-500
 
-	// SFA3X
-	PKT_TYPE_SENSOR_SFA3X_HCHO = 0xBE,
+#ifdef LEGACY_SENSORS
+	// Legacy: SCD41 CO2 / SHT41 temp+humidity / SGP40 tVOC
+	PKT_TYPE_SENSOR_SCD41_CO2        = 0xB2,
+	PKT_TYPE_SENSOR_SHT41_TEMP       = 0xB3,
+	PKT_TYPE_SENSOR_SHT41_HUMIDITY   = 0xB4,
+	PKT_TYPE_SENSOR_SGP40_TVOC_INDEX = 0xB5,
+	// Legacy: SEN5x dynamic-registry protocol
+	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm1p0  = 0xB6,
+	PKT_TYPE_SENSOR_SEN5X_massConcentrationPm2p5  = 0xB7,
+	PKT_TYPE_SENSOR_SEN5X_ambientTemperature      = 0xBB,
+	PKT_TYPE_SENSOR_SEN5X_vocIndex                = 0xBC,
+	PKT_TYPE_SENSOR_SEN5X_noxIndex                = 0xBD,
+	// Legacy: SFA3X formaldehyde sensor
+	PKT_TYPE_SENSOR_SFA3X_HCHO     = 0xBE,
 	PKT_TYPE_SENSOR_SFA3X_HUMIDITY = 0xBF,
-	PKT_TYPE_SENSOR_SFA3X_TEMP = 0xC0,
+#endif /* LEGACY_SENSORS */
 };
 
 #define PKT_SENSOR_ID_AHT20_TEMP 0

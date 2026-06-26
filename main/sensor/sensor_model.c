@@ -140,35 +140,54 @@ SensorData* get_current_sensor_data(SensorData* data, enum sensor_data_type type
  * @return int
  */
 int _sensor_data_parse_handle(uint8_t* p_data, ssize_t len) {
-	if(len < sizeof(float) + 1) // Length check
+	if(len < (ssize_t)(sizeof(float) + 1))
 	{
-		// Handle error or return
 		return -1;
 	}
 
 	uint8_t pkt_type = p_data[0];
 	switch(pkt_type)
 	{
-			/*SCD41*/
+		/* SEN54 metrics */
+		case PKT_TYPE_SENSOR_SEN54_PM1_0:
+			update_sensor_data(SEN54_SENSOR_PM1_0, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_PM2_5:
+			update_sensor_data(SEN54_SENSOR_PM2_5, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_PM4_0:
+			update_sensor_data(SEN54_SENSOR_PM4_0, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_PM10:
+			update_sensor_data(SEN54_SENSOR_PM10, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_HUMIDITY:
+			update_sensor_data(SEN54_SENSOR_HUMIDITY, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_TEMPERATURE:
+			update_sensor_data(SEN54_SENSOR_TEMP, (p_data + 1));
+			break;
+		case PKT_TYPE_SENSOR_SEN54_VOC_INDEX:
+			update_sensor_data(SEN54_SENSOR_VOC_IDX, (p_data + 1));
+			break;
+
+#ifdef LEGACY_SENSORS
+		/* Legacy: SCD41 + SGP40 + SHT41 — disabled, SEN54 replaces them */
 		case PKT_TYPE_SENSOR_SCD41_CO2:
-			// ESP_LOGI(TAG, "PKT_TYPE_SENSOR_SCD41_CO2");
 			update_sensor_data(SCD41_SENSOR_CO2, (p_data + 1));
 			break;
 		case PKT_TYPE_SENSOR_SGP40_TVOC_INDEX:
-			// ESP_LOGI(TAG, "PKT_TYPE_SENSOR_SGP40_TVOC_INDEX");
 			update_sensor_data(SGP40_SENSOR_TVOC, (p_data + 1));
 			break;
 		case PKT_TYPE_SENSOR_SHT41_TEMP:
-			ESP_LOGI(TAG, "PKT_TYPE_SENSOR_SHT41_TEMP"); // Not Used
 			update_sensor_data(SHT41_SENSOR_TEMP, (p_data + 1));
 			break;
-			/*SHT41*/
 		case PKT_TYPE_SENSOR_SHT41_HUMIDITY:
-			// ESP_LOGI(TAG, "PKT_TYPE_SENSOR_SHT41_HUMIDITY");
 			update_sensor_data(SHT41_SENSOR_HUMIDITY, (p_data + 1));
 			break;
+#endif /* LEGACY_SENSORS */
+
 		default:
-			// Handle unknown packet type
 			break;
 	}
 

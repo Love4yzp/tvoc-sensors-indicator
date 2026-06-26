@@ -88,11 +88,24 @@ struct sensor_data_minmax {
     bool   valid;
 };
 
-#define SENSOR_TYPE_LIST                           \
-    X(SCD41_SENSOR_CO2,      "SCD41_CO2")         \
-    X(SGP40_SENSOR_TVOC,     "SGP40_TVOC")        \
-    X(SHT41_SENSOR_TEMP,     "SHT41_TEMP")        \
-    X(SHT41_SENSOR_HUMIDITY, "SHT41_HUMIDITY")
+/* Legacy sensors — disabled, replaced by SEN54.
+ * Re-enable with -DLEGACY_SENSORS if reverting hardware.
+ * #define SENSOR_TYPE_LIST                           \
+ *     X(SCD41_SENSOR_CO2,      "SCD41_CO2")         \
+ *     X(SGP40_SENSOR_TVOC,     "SGP40_TVOC")        \
+ *     X(SHT41_SENSOR_TEMP,     "SHT41_TEMP")        \
+ *     X(SHT41_SENSOR_HUMIDITY, "SHT41_HUMIDITY")
+ */
+
+/* SEN54: metric names match Sparkplug B payload field names */
+#define SENSOR_TYPE_LIST                                      \
+    X(SEN54_SENSOR_PM1_0,    "sen5x/pm1_0")                  \
+    X(SEN54_SENSOR_PM2_5,    "sen5x/pm2_5")                  \
+    X(SEN54_SENSOR_PM4_0,    "sen5x/pm4_0")                  \
+    X(SEN54_SENSOR_PM10,     "sen5x/pm10")                   \
+    X(SEN54_SENSOR_HUMIDITY, "sen5x/humidity")               \
+    X(SEN54_SENSOR_TEMP,     "sen5x/temperature")            \
+    X(SEN54_SENSOR_VOC_IDX,  "sen5x/voc_index")
 
 #define X(type, str) type,
 enum sensor_data_type {
@@ -114,6 +127,20 @@ struct view_data_sensor_history_data {
     float                     day_max;
     float                     week_min;
     float                     week_max;
+};
+
+/* ── SEN5X status ─────────────────────────────────────────────────────────── */
+
+/* voc_alert levels (lab-specific thresholds):
+ *   0 = normal   (voc_index <= 120)
+ *   1 = light    (120 < voc_index <= 180)
+ *   2 = moderate (180 < voc_index <= 250)
+ *   3 = severe   (voc_index > 250)
+ * During WARMING_UP, voc_alert is always 0.
+ */
+struct view_data_sen5x_status {
+    bool warming_up;
+    int  voc_alert;  /* 0-3 */
 };
 
 /* ── Home Assistant ───────────────────────────────────────────────────────── */
@@ -217,6 +244,11 @@ enum {
 
     /* P: ha/ha_switch.c  C: ha/ha_switch.c (internal loop)  Payload: struct view_data_ha_switch_data */
     VIEW_EVENT_HA_SWITCH_SET,
+
+    /* P: sen5x/sen5x_mqtt.c  C: sensor/sensor_view.c
+     * Payload: struct view_data_sen5x_status
+     * Posted on WARMING_UP→ACTIVE transition and each DDATA publish. */
+    VIEW_EVENT_SEN5X_STATUS,
 
     VIEW_EVENT_ALL,
 };
