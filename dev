@@ -3,6 +3,7 @@
 #
 #   ./dev build | fullclean | flash | monitor -> ESP32-S3 (ESP-IDF)
 #   ./dev rp2040 build | upload | monitor   -> RP2040 coprocessor (PlatformIO)
+#   ./dev sim build | run | screenshot      -> macOS SDL2 simulator (no ESP-IDF)
 #
 # ESP-IDF activation: only the ESP32-S3 commands need it. If `idf.py` is not
 # already on PATH, this sources ESP-IDF from $IDF_PATH (set in your shell
