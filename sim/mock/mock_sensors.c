@@ -6,8 +6,9 @@
  * visually verify the UI updates correctly.
  *
  * Event delivery:
- *   VIEW_EVENT_SENSOR_DATA  — 1 Hz, all 4 built-in sensor types
- *   VIEW_EVENT_WIFI_ST      — once at startup (connected)
+ *   VIEW_EVENT_SENSOR_DATA   — 1 Hz, all SEN54 sensor types
+ *   VIEW_EVENT_SEN5X_STATUS  — once at startup (warming_up=false, voc_alert=0)
+ *   VIEW_EVENT_WIFI_ST       — once at startup (connected)
  */
 #include "mock_sensors.h"
 #include "view_data.h"
@@ -28,8 +29,9 @@ static float osc(float t, float lo, float hi, float period) {
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 
-static uint32_t s_last_sensor_tick = 0;
-static bool     s_wifi_posted      = false;
+static uint32_t s_last_sensor_tick  = 0;
+static bool     s_wifi_posted       = false;
+static bool     s_sen5x_status_posted = false;
 
 /* ── WiFi ────────────────────────────────────────────────────────────────── */
 
@@ -47,6 +49,15 @@ static void post_wifi_status(void) {
     printf("[mock] wifi: connected (ssid=%s rssi=%d)\n", st.ssid, st.rssi);
 }
 
+/* ── SEN5X status ────────────────────────────────────────────────────────── */
+
+static void post_sen5x_status(bool warming_up, int voc_alert) {
+    struct view_data_sen5x_status st = { .warming_up = warming_up, .voc_alert = voc_alert };
+    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SEN5X_STATUS,
+                      &st, sizeof(st), portMAX_DELAY);
+    printf("[mock] sen5x status: warming_up=%d voc_alert=%d\n", warming_up, voc_alert);
+}
+
 /* ── Sensors ─────────────────────────────────────────────────────────────── */
 
 static void post_sensor(enum sensor_data_type type, float value) {
@@ -57,21 +68,20 @@ static void post_sensor(enum sensor_data_type type, float value) {
 }
 
 static void tick_sensors(void) {
-    float t = SDL_GetTicks() / 1000.0f;   /* seconds since init */
-
-    post_sensor(SCD41_SENSOR_CO2,      osc(t, 400.0f,  1200.0f, 30.0f));
-    post_sensor(SGP40_SENSOR_TVOC,     osc(t,   0.0f,   300.0f, 45.0f));
-    post_sensor(SHT41_SENSOR_TEMP,     osc(t,  18.0f,    32.0f, 60.0f));
-    post_sensor(SHT41_SENSOR_HUMIDITY, osc(t,  30.0f,    80.0f, 50.0f));
+    float t = SDL_GetTicks() / 1000.0f;
+    int i = 0;
+#define X(type, name) post_sensor(type, osc(t, 1.0f, 300.0f, 30.0f + (i++) * 7.0f));
+    SENSOR_TYPE_LIST
+#undef X
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
 void mock_sensors_start(void) {
-    printf("[mock] sensors: starting (1 Hz sensor events, wifi at startup)\n");
-    /* First tick fires immediately */
-    s_last_sensor_tick = 0;
-    s_wifi_posted = false;
+    printf("[mock] sensors: starting (1 Hz SEN54 events, wifi+status at startup)\n");
+    s_last_sensor_tick    = 0;
+    s_wifi_posted         = false;
+    s_sen5x_status_posted = false;
 }
 
 void mock_sensors_tick(void) {
@@ -80,6 +90,11 @@ void mock_sensors_tick(void) {
     if (!s_wifi_posted) {
         post_wifi_status();
         s_wifi_posted = true;
+    }
+
+    if (!s_sen5x_status_posted) {
+        post_sen5x_status(false, 0);
+        s_sen5x_status_posted = true;
     }
 
     if (now - s_last_sensor_tick >= 1000) {
