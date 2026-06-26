@@ -46,8 +46,9 @@ int nav_init(void) {
 	nav_style_base_obj(s_tileview);
 
 	for (int i = 0; i < NAV_TILE_COUNT; i++) {
-		s_tiles[i] = lv_tileview_add_tile(s_tileview, i, 0,
-										  LV_DIR_LEFT | LV_DIR_RIGHT);
+		/* Tile 0 is the only navigable destination — no horizontal swipe */
+		lv_dir_t dir = (i == 0) ? LV_DIR_NONE : LV_DIR_LEFT;
+		s_tiles[i] = lv_tileview_add_tile(s_tileview, i, 0, dir);
 		lv_obj_set_size(s_tiles[i], NAV_TILE_WIDTH, NAV_TILE_HEIGHT);
 		nav_style_static_obj(s_tiles[i]);
 	}
