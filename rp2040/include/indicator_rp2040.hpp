@@ -25,17 +25,24 @@ enum pkt_type {
     PKT_TYPE_CMD_POWER_ON         = 0xA4,
     PKT_TYPE_CMD_RESCAN_GROVE     = 0xA5,
 
-    // Inner Sensor
-    // PKT_TYPE_SENSOR_SCD41_TEMP      = 0xB0, // not accurate
-    // PKT_TYPE_SENSOR_SCD41_HUMIDITY = 0xB1,
-    PKT_TYPE_SENSOR_SCD41_CO2 = 0xB2,  // float
+#ifdef LEGACY_SENSORS
+    // Legacy: SCD41 CO2 sensor
+    PKT_TYPE_SENSOR_SCD41_CO2       = 0xB2,  // float
+    // Legacy: SHT41 temperature/humidity
+    PKT_TYPE_SENSOR_SHT41_TEMP      = 0xB3,
+    PKT_TYPE_SENSOR_SHT41_HUMIDITY  = 0xB4,  // float
+    // Legacy: SGP40 VOC index
+    PKT_TYPE_SENSOR_SGP40_TVOC_INDEX = 0xB5, // float
+#endif /* LEGACY_SENSORS */
 
-    // SHT41 AHT
-    PKT_TYPE_SENSOR_SHT41_TEMP     = 0xB3,
-    PKT_TYPE_SENSOR_SHT41_HUMIDITY = 0xB4,  // float
-    
-    // Inner Sensor SGP40
-    PKT_TYPE_SENSOR_SGP40_TVOC_INDEX = 0xB5,  // float
+    // SEN54: all-in-one PM + humidity + temperature + VOC sensor
+    PKT_TYPE_SENSOR_SEN54_PM1_0       = 0xC0,  // float, µg/m³
+    PKT_TYPE_SENSOR_SEN54_PM2_5       = 0xC1,  // float, µg/m³
+    PKT_TYPE_SENSOR_SEN54_PM4_0       = 0xC2,  // float, µg/m³
+    PKT_TYPE_SENSOR_SEN54_PM10        = 0xC3,  // float, µg/m³
+    PKT_TYPE_SENSOR_SEN54_HUMIDITY    = 0xC4,  // float, %RH
+    PKT_TYPE_SENSOR_SEN54_TEMPERATURE = 0xC5,  // float, °C
+    PKT_TYPE_SENSOR_SEN54_VOC_INDEX   = 0xC6,  // float, VOC index (1-500)
 
     // Dynamic sensor registry packets
     PKT_TYPE_SENSOR_ATTACHED = 0xB8,
@@ -43,13 +50,17 @@ enum pkt_type {
     PKT_TYPE_SENSOR_VALUE    = 0xBA,
 };
 
-#define PKT_SENSOR_ID_AHT20_TEMP 0
+#ifdef LEGACY_SENSORS
+#define PKT_SENSOR_ID_AHT20_TEMP     0
 #define PKT_SENSOR_ID_AHT20_HUMIDITY 1
-#define PKT_SENSOR_ID_SCD41_CO2 2
-#define PKT_SENSOR_ID_SGP40_VOC 3
-#define PKT_SENSOR_ID_SCD41_TEMP 4
+#define PKT_SENSOR_ID_SCD41_CO2      2
+#define PKT_SENSOR_ID_SGP40_VOC      3
+#define PKT_SENSOR_ID_SCD41_TEMP     4
 #define PKT_SENSOR_ID_SCD41_HUMIDITY 5
-#define PKT_SENSOR_ID_GROVE_BASE 0x10
+#define PKT_SENSOR_ID_GROVE_BASE     0x10
+#endif /* LEGACY_SENSORS */
+
+#define PKT_SENSOR_ID_SEN54          0x20
 
 #define PKT_SENSOR_CAT_TEMP 0
 #define PKT_SENSOR_CAT_HUMIDITY 1
@@ -83,6 +94,16 @@ typedef struct {
     float    temperature;
 } SCD4XData;
 
+typedef struct {
+    float pm1p0;
+    float pm2p5;
+    float pm4p0;
+    float pm10p0;
+    float humidity;
+    float temperature;
+    float vocIndex;
+} SEN5XData;
+
 
 /************************ aht  temp & humidity ****************************/
 
@@ -102,6 +123,11 @@ void sensor_sgp40_print(const SPG40Data& data);
 void sensor_scd4x_init(void);
 bool sensor_scd4x_get(SCD4XData& data);
 void sensor_scd4x_print(const SCD4XData& data);
+
+/************************ sen54 ****************************/
+bool sensor_sen54_init(void);
+bool sensor_sen54_get(SEN5XData& data);
+void sensor_sen54_print(const SEN5XData& data);
 
 /************************ grove  ****************************/
 void grove_adc_get(void);  // todo

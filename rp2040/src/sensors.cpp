@@ -8,20 +8,64 @@
  * @copyright Copyright (c) 2024
  * 
  */
-#include "AHT20.h"
 #include <math.h>
-#include <SensirionI2CSgp40.h>
-#include <SensirionI2cScd4x.h>
 #include <string.h>
-#include <VOCGasIndexAlgorithm.h>
+#include <SensirionI2CSen5x.h>
 #include "indicator_rp2040.hpp"
 
+#ifdef LEGACY_SENSORS
+#include "AHT20.h"
+#include <SensirionI2CSgp40.h>
+#include <SensirionI2cScd4x.h>
+#include <VOCGasIndexAlgorithm.h>
+#endif /* LEGACY_SENSORS */
+
 /************************ instance  ****************************/
+SensirionI2CSen5x sen5x;
+
+#ifdef LEGACY_SENSORS
 AHT20             AHT;    // grove-sensor: humi & temp
 SensirionI2CSgp40 sgp40;  // tvoc
 SensirionI2cScd4x scd4x;  // co2
-
 static uint8_t sht41_address = 0x00;
+#endif /* LEGACY_SENSORS */
+
+/************************ sen54 ****************************/
+
+bool sensor_sen54_init(void)
+{
+    sen5x.begin(Wire);
+    uint16_t error = sen5x.deviceReset();
+    if (error) {
+        Serial.println("SEN54 reset failed");
+        return false;
+    }
+    delay(1200);  // allow sensor to stabilize after reset
+    error = sen5x.startMeasurement();
+    if (error) {
+        Serial.println("SEN54 startMeasurement failed");
+        return false;
+    }
+    Serial.println("SEN54 initialized");
+    return true;
+}
+
+bool sensor_sen54_get(SEN5XData& data)
+{
+    float noxIndex;  // SEN54 has no NOx — value will be NaN
+    uint16_t error = sen5x.readMeasuredValues(
+        data.pm1p0, data.pm2p5, data.pm4p0, data.pm10p0,
+        data.humidity, data.temperature, data.vocIndex, noxIndex);
+    return error == 0;
+}
+
+void sensor_sen54_print(const SEN5XData& data)
+{
+    Serial.printf("SEN54: PM1=%.1f PM2.5=%.1f PM4=%.1f PM10=%.1f "
+                  "Hum=%.1f%% Temp=%.1fC VOC=%.0f\n",
+                  data.pm1p0, data.pm2p5, data.pm4p0, data.pm10p0,
+                  data.humidity, data.temperature, data.vocIndex);
+}
 
 /************************ Sensor Power ****************************/
 // The built-in sensor needs to be powered on
@@ -133,6 +177,7 @@ void sensor_value_send(PacketSerial& packetSerial, uint8_t id, float data)
     packetSerial.send(data_buf, sizeof(data_buf));
 }
 
+#ifdef LEGACY_SENSORS
 /************************ aht  temp & humidity ****************************/
 
 void sensor_aht_init(void)
@@ -413,3 +458,4 @@ void sensor_scd4x_print(const SCD4XData& data)
         Serial.println("Invalid SCD4X data.");
     }
 }
+#endif /* LEGACY_SENSORS */
