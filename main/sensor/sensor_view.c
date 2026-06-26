@@ -1,240 +1,318 @@
 #include <stdio.h>
-#include "esp_log.h"
 #include <string.h>
 
+#include "esp_log.h"
+#include "lv_port.h"
+#include "nav.h"
 #include "sensor_model.h"
 #include "sensor_view.h"
-
-#include "home_assistant_config.h"
-#include "lv_port.h"
 #include "view_data.h"
 
-// #define VIEW_DEBUG
-#define BUF_SIZE 32
+static const char *TAG = "sensor_view";
 
-#define SENSOR_CARD_WIDTH  214
-#define SENSOR_CARD_HEIGHT 164
+#define BUF_SIZE          32
+#define CARD_W            214
+#define CARD_H            100
+#define CARD_GAP_X        8
+#define CARD_GAP_Y        8
+#define CARD_LEFT_MARGIN  22
+#define HEADER_H          75
+#define VOC_CARD_W        (CARD_W * 2 + CARD_GAP_X)   /* 436 px */
+#define VOC_CARD_H        150
 
-LV_IMAGE_DECLARE(ui_img_ic_temp_png);
-LV_IMAGE_DECLARE(ui_img_ic_hum_png);
-LV_IMAGE_DECLARE(ui_img_ic_tvoc_png);
-LV_IMAGE_DECLARE(ui_img_ic_co2_png);
+/* Row y-offsets (all relative to tile top) */
+#define ROW0_Y  (HEADER_H + CARD_GAP_Y)                                /* VOC   */
+#define ROW1_Y  (ROW0_Y + VOC_CARD_H + CARD_GAP_Y)                    /* Temp + Hum */
+#define ROW2_Y  (ROW1_Y + CARD_H + CARD_GAP_Y)                        /* PM2.5 + PM1.0 */
+/* ROW2 bottom = ROW2_Y + CARD_H = 83+150+8+100+8+100 = 449 — fits in 480, no scroll */
+
 LV_FONT_DECLARE(ui_font_font0);
 
-static const char* TAG = "sensor_view";
-
-// typedef struct SensorView {
-//     lv_obj_t* ui_lbl;
-// } SensorView;
-
-typedef struct SensorView
-{
-	lv_obj_t** ui_lbl;
-	int ui_lbl_size;
-} SensorView;
-
-static SensorView sensorPanel[ENUM_SENSOR_ALL] = {NULL};
-
-static void format_sensor_data(char* buf, enum sensor_data_type sensor_type, const float data);
-
-typedef struct SensorCardSpec
-{
-	enum sensor_data_type type;
-	const lv_image_dsc_t* icon;
-	const char* name;
-	const char* unit;
-	uint32_t accent_color;
-	int32_t x;
-	int32_t y;
-	lv_obj_t* labels[1];
-} SensorCardSpec;
-
-static SensorCardSpec sensor_card_specs[] = {
-	{
-		.type = SHT41_SENSOR_TEMP,
-		.icon = &ui_img_ic_temp_png,
-		.name = "Temp",
-		.unit = CONFIG_SENSOR1_UI_UNIT,
-		.accent_color = 0xECBF41,
-		.x = 22,
-		.y = 96,
-	},
-	{
-		.type = SHT41_SENSOR_HUMIDITY,
-		.icon = &ui_img_ic_hum_png,
-		.name = "Humidity",
-		.unit = "%",
-		.accent_color = 0x52AAE5,
-		.x = 244,
-		.y = 96,
-	},
-	{
-		.type = SGP40_SENSOR_TVOC,
-		.icon = &ui_img_ic_tvoc_png,
-		.name = "tVOC",
-		.unit = "index",
-		.accent_color = 0xD76D46,
-		.x = 22,
-		.y = 268,
-	},
-	{
-		.type = SCD41_SENSOR_CO2,
-		.icon = &ui_img_ic_co2_png,
-		.name = "CO2",
-		.unit = "ppm",
-		.accent_color = 0x4F9E52,
-		.x = 244,
-		.y = 268,
-	},
-};
-
-static void sensor_view_create_header(lv_obj_t* tile) {
-	lv_obj_t* header = lv_obj_create(tile);
-	lv_obj_set_size(header, 480, 85);
-	lv_obj_set_pos(header, 0, 0);
-	lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_border_width(header, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_pad_all(header, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-	lv_obj_t* title = lv_label_create(header);
-	lv_label_set_text(title, "Home Assistant Data");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_opa(title, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_font(title, &ui_font_font0, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_center(title);
-}
-
-static void sensor_view_create_card(lv_obj_t* tile, SensorCardSpec* spec) {
-	lv_color_t accent = lv_color_hex(spec->accent_color);
-
-	lv_obj_t* card = lv_obj_create(tile);
-	lv_obj_set_size(card, SENSOR_CARD_WIDTH, SENSOR_CARD_HEIGHT);
-	lv_obj_set_pos(card, spec->x, spec->y);
-	lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_radius(card, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_bg_color(card, lv_color_hex(0x282828), LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_border_width(card, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_pad_all(card, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-	lv_obj_t* icon = lv_image_create(card);
-	lv_image_set_src(icon, spec->icon);
-	lv_obj_set_pos(icon, 69, 22);
-	lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-
-	lv_obj_t* data = lv_label_create(card);
-	lv_obj_set_width(data, 100);
-	lv_obj_set_height(data, LV_SIZE_CONTENT);
-	lv_obj_set_pos(data, 11, 79);
-	lv_label_set_text(data, "N/A");
-	lv_obj_set_style_text_color(data, accent, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_opa(data, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_align(data, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_font(data, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-	lv_obj_t* unit = lv_label_create(card);
-	lv_label_set_text(unit, spec->unit);
-	lv_obj_set_style_text_color(unit, accent, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_opa(unit, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_font(unit, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_align(unit, LV_ALIGN_BOTTOM_RIGHT, -18, -53);
-
-	lv_obj_t* name = lv_label_create(card);
-	lv_label_set_text(name, spec->name);
-	lv_obj_set_align(name, LV_ALIGN_BOTTOM_MID);
-	lv_obj_set_y(name, -5);
-	lv_obj_set_style_text_color(name, lv_color_hex(0x9E9E9E), LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_opa(name, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_font(name, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-	spec->labels[0] = data;
-	sensorPanel[spec->type].ui_lbl_size = 1;
-	sensorPanel[spec->type].ui_lbl = spec->labels;
-}
-
-/**
- * @brief Get the data from RP2040
- * @attention called in indicator_view.c
+/* ── VOC 3-state system ─────────────────────────────────────────────────────
+ * Maps voc_alert: 0 → Good, 1-2 → Moderate, 3 → Poor
  */
-void view_event_update_present_sensorData(void* handler_args, esp_event_base_t base, int32_t id,
-										  void* event_data) {
-	if(id != VIEW_EVENT_SENSOR_DATA)
-		return;
-	// ESP_LOGI(TAG, "event: VIEW_EVENT_SENSOR_DATA");
-	struct view_data_sensor_data* p_data = (struct view_data_sensor_data*)event_data;
-	if(p_data == NULL)
-	{
-		ESP_LOGE(TAG, "event_data is NULL");
-		return;
-	}
-	if(sensorPanel[p_data->sensor_type].ui_lbl == NULL)
-	{
-		ESP_LOGE(TAG, "SensePanel did't init completely");
-		return;
-	}
-	char data_buf[BUF_SIZE];
+#define N_VOC_STATES  3
+#define SEG_MARGIN    14   /* left/right margin inside VOC card */
+#define SEG_GAP       6    /* gap between segments */
+#define SEG_W         132  /* (436 - 2*14 - 2*6) / 3 */
+#define SEG_H         38
+#define SEG_Y         (VOC_CARD_H - SEG_H - 8)
 
-	memset(data_buf, 0, sizeof(data_buf));
+static const uint32_t VOC_STATE_COLORS[N_VOC_STATES] = {
+    0x4F9E52,   /* Good     — green  */
+    0xD76D46,   /* Moderate — orange */
+    0xC0392B,   /* Poor     — red    */
+};
+static const char *VOC_STATE_LABELS[N_VOC_STATES] = {"Good", "Moderate", "Poor"};
 
-	format_sensor_data(data_buf, p_data->sensor_type, p_data->value); // entry
+static lv_obj_t *s_voc_value_lbl  = NULL;
+static lv_obj_t *s_voc_state_lbl  = NULL;
+static lv_obj_t *s_voc_seg[N_VOC_STATES];
+static lv_obj_t *s_voc_seg_lbl[N_VOC_STATES];
+static bool      s_warming_up     = true;   /* suppress VOC value until status event fires */
 
-#ifdef VIEW_DEBUG
-	ESP_LOGI(TAG, "update %s:%s", enum sensor_data_typeStrings[p_data->sensor_type], data_buf);
-#endif
-	lv_port_sem_take();
-	for(int i = 0; i < sensorPanel[p_data->sensor_type].ui_lbl_size; i++)
-	{
-		lv_label_set_text(sensorPanel[p_data->sensor_type].ui_lbl[i], data_buf); // update ui lable
-	}
-	// lv_label_set_text(sensorPanel[p_data->sensor_type].ui_lbl, data_buf); // update ui lable
-	lv_port_sem_give();
+static int _voc_state(int alert)
+{
+    if (alert <= 0) return 0;
+    if (alert <= 2) return 1;
+    return 2;
 }
 
-// format sensor data according to sensor type
-static void format_sensor_data(char* buf, enum sensor_data_type sensor_type, const float data) {
-	char* format_style;
+/* ── Regular card specs (PM2.5, PM1.0, Temp, Humidity) ─────────────────── */
 
-	if(data < 0)
-	{
-		snprintf(buf, BUF_SIZE, "N/A");
-		return;
-	}
+typedef struct {
+    enum sensor_data_type type;
+    const char           *name;
+    const char           *unit;
+    const char           *fmt;
+    uint32_t              accent;
+    int32_t               x, y, w, h;
+    lv_obj_t             *lbl_data;
+} CardSpec;
 
-	switch(sensor_type)
-	{
-		case SHT41_SENSOR_TEMP:
-			format_style = "%.1f";
-			break;
-		case SCD41_SENSOR_CO2:
-		case SGP40_SENSOR_TVOC:
-		case SHT41_SENSOR_HUMIDITY:
-		default:
-			format_style = "%.0f";
-			break;
-	}
-	snprintf(buf, BUF_SIZE, format_style, data); // wrtie to buf
+static CardSpec s_cards[] = {
+    /* Row 1 */
+    { SEN54_SENSOR_TEMP,     "Temp",     "\xc2\xb0" "C",              "%.1f",
+      0xECBF41, CARD_LEFT_MARGIN,                  ROW1_Y, CARD_W, CARD_H, NULL },
+    { SEN54_SENSOR_HUMIDITY, "Humidity", "%",                          "%.0f",
+      0x52AAE5, CARD_LEFT_MARGIN + CARD_W + CARD_GAP_X, ROW1_Y, CARD_W, CARD_H, NULL },
+
+    /* Row 2 */
+    { SEN54_SENSOR_PM2_5, "PM 2.5", "ug/m3",        "%.1f",
+      0x9B59B6, CARD_LEFT_MARGIN,                  ROW2_Y, CARD_W, CARD_H, NULL },
+    { SEN54_SENSOR_PM1_0, "PM 1.0", "ug/m3",        "%.1f",
+      0x16A085, CARD_LEFT_MARGIN + CARD_W + CARD_GAP_X, ROW2_Y, CARD_W, CARD_H, NULL },
+};
+#define N_CARDS (sizeof(s_cards) / sizeof(s_cards[0]))
+
+/* ── Card builders ──────────────────────────────────────────────────────── */
+
+static void _card_base_style(lv_obj_t *card, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    lv_obj_set_size(card, w, h);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x282828), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
 }
 
-void view_sensor_init() {
-	lv_port_sem_take();
-	lv_obj_t* tile = nav_get_tile(NAV_TILE_HA_DATA);
-	if(tile == NULL)
-	{
-		lv_port_sem_give();
-		ESP_LOGE(TAG, "Sensor data tile is not init");
-		return;
-	}
+static void _create_regular_card(lv_obj_t *tile, CardSpec *spec)
+{
+    lv_obj_t *card = lv_obj_create(tile);
+    _card_base_style(card, spec->x, spec->y, spec->w, spec->h);
 
-	sensor_view_create_header(tile);
-	for(size_t i = 0; i < sizeof(sensor_card_specs) / sizeof(sensor_card_specs[0]); i++)
-	{
-		sensor_view_create_card(tile, &sensor_card_specs[i]);
-	}
-	lv_port_sem_give();
+    lv_color_t accent = lv_color_hex(spec->accent);
 
-	ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
-		view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
-		view_event_update_present_sensorData, NULL, NULL));
+    lv_obj_t *name = lv_label_create(card);
+    lv_label_set_text(name, spec->name);
+    lv_obj_set_style_text_color(name, lv_color_hex(0x9E9E9E), 0);
+    lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(name, 10, 6);
+
+    lv_obj_t *data = lv_label_create(card);
+    lv_label_set_text(data, "---");
+    lv_obj_set_style_text_color(data, accent, 0);
+    lv_obj_set_style_text_font(data, &lv_font_montserrat_36, 0);
+    lv_obj_align(data, LV_ALIGN_CENTER, 0, 5);
+    spec->lbl_data = data;
+
+    lv_obj_t *unit = lv_label_create(card);
+    lv_label_set_text(unit, spec->unit);
+    lv_obj_set_style_text_color(unit, accent, 0);
+    lv_obj_set_style_text_font(unit, &lv_font_montserrat_14, 0);
+    lv_obj_align(unit, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+}
+
+static void _create_voc_card(lv_obj_t *tile)
+{
+    lv_obj_t *card = lv_obj_create(tile);
+    _card_base_style(card, CARD_LEFT_MARGIN, ROW0_Y, VOC_CARD_W, VOC_CARD_H);
+
+    /* ── Name label ── */
+    lv_obj_t *name = lv_label_create(card);
+    lv_label_set_text(name, "VOC Index");
+    lv_obj_set_style_text_color(name, lv_color_hex(0x9E9E9E), 0);
+    lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(name, 14, 7);
+
+    /* ── Large numeric value (left side) ── */
+    lv_obj_t *val = lv_label_create(card);
+    lv_label_set_text(val, "---");
+    lv_obj_set_style_text_color(val, lv_color_hex(0x555555), 0);  /* gray until warm-up done */
+    lv_obj_set_style_text_font(val, &ui_font_font0, 0);
+    lv_obj_align(val, LV_ALIGN_CENTER, 0, -23);
+    s_voc_value_lbl = val;
+
+    /* ── State / calibrating label (right side) ── */
+    lv_obj_t *st = lv_label_create(card);
+    lv_label_set_text(st, "Calibrating");
+    lv_obj_set_style_text_color(st, lv_color_hex(0xECBF41), 0);   /* amber while warming */
+    lv_obj_set_style_text_font(st, &lv_font_montserrat_26, 0);
+    lv_obj_align(st, LV_ALIGN_TOP_RIGHT, -14, 46);
+    s_voc_state_lbl = st;
+
+    /* ── 3 state segments (Poor=left, Moderate=center, Good=right) ── */
+    for (int i = 0; i < N_VOC_STATES; i++) {
+        int32_t sx = SEG_MARGIN + (N_VOC_STATES - 1 - i) * (SEG_W + SEG_GAP);
+
+        lv_obj_t *seg = lv_obj_create(card);
+        lv_obj_set_size(seg, SEG_W, SEG_H);
+        lv_obj_set_pos(seg, sx, SEG_Y);
+        lv_obj_remove_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_radius(seg, 6, 0);
+        lv_obj_set_style_bg_color(seg, lv_color_hex(0x2A2A2A), 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(seg, 0, 0);
+        lv_obj_set_style_pad_all(seg, 0, 0);
+        s_voc_seg[i] = seg;
+
+        lv_obj_t *lbl = lv_label_create(seg);
+        lv_label_set_text(lbl, VOC_STATE_LABELS[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0x555555), 0);
+        lv_obj_center(lbl);
+        s_voc_seg_lbl[i] = lbl;
+    }
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+static void _create_header(lv_obj_t *tile)
+{
+    lv_obj_t *hdr = lv_obj_create(tile);
+    lv_obj_set_size(hdr, 480, HEADER_H);
+    lv_obj_set_pos(hdr, 0, 0);
+    lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hdr, 0, 0);
+    lv_obj_set_style_pad_all(hdr, 0, 0);
+
+    lv_obj_t *title = lv_label_create(hdr);
+    lv_label_set_text(title, "Seeed Monitor");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(title, &ui_font_font0, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+}
+
+/* ── Shared VOC segment update (must hold LVGL lock on entry) ───────────── */
+
+static void _update_voc_state(int voc_state_idx, bool warming_up)
+{
+    for (int i = 0; i < N_VOC_STATES; i++) {
+        if (!s_voc_seg[i]) continue;
+        bool active = !warming_up && (i == voc_state_idx);
+
+        lv_obj_set_style_bg_color(s_voc_seg[i],
+            active ? lv_color_hex(VOC_STATE_COLORS[i]) : lv_color_hex(0x2A2A2A), 0);
+
+        if (s_voc_seg_lbl[i]) {
+            lv_obj_set_style_text_color(s_voc_seg_lbl[i],
+                active ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x555555), 0);
+        }
+    }
+
+    if (s_voc_state_lbl) {
+        if (warming_up) {
+            lv_label_set_text(s_voc_state_lbl, "Calibrating");
+            lv_obj_set_style_text_color(s_voc_state_lbl, lv_color_hex(0xECBF41), 0);
+        } else {
+            lv_label_set_text(s_voc_state_lbl, VOC_STATE_LABELS[voc_state_idx]);
+            lv_obj_set_style_text_color(s_voc_state_lbl,
+                lv_color_hex(VOC_STATE_COLORS[voc_state_idx]), 0);
+        }
+    }
+
+    if (s_voc_value_lbl) {
+        uint32_t vc = warming_up ? 0x555555 : VOC_STATE_COLORS[voc_state_idx];
+        lv_obj_set_style_text_color(s_voc_value_lbl, lv_color_hex(vc), 0);
+    }
+}
+
+/* ── Event handlers ─────────────────────────────────────────────────────── */
+
+void view_event_update_present_sensorData(void *handler_args, esp_event_base_t base,
+                                           int32_t id, void *event_data)
+{
+    if (id != VIEW_EVENT_SENSOR_DATA) return;
+
+    struct view_data_sensor_data *p = (struct view_data_sensor_data *)event_data;
+    if (!p) return;
+
+    /* VOC value update — suppress during warm-up (sensor outputs 0 and is unreliable) */
+    if (p->sensor_type == SEN54_SENSOR_VOC_IDX) {
+        if (!s_warming_up) {
+            char buf[BUF_SIZE];
+            snprintf(buf, sizeof(buf), "%.0f", p->value);
+            lv_port_sem_take();
+            if (s_voc_value_lbl) lv_label_set_text(s_voc_value_lbl, buf);
+            lv_port_sem_give();
+        }
+        return;
+    }
+
+    /* Regular cards */
+    CardSpec *spec = NULL;
+    for (size_t i = 0; i < N_CARDS; i++) {
+        if (s_cards[i].type == p->sensor_type) {
+            spec = &s_cards[i];
+            break;
+        }
+    }
+    if (!spec || !spec->lbl_data) return;
+
+    char buf[BUF_SIZE];
+    snprintf(buf, sizeof(buf), spec->fmt, p->value);
+    lv_port_sem_take();
+    lv_label_set_text(spec->lbl_data, buf);
+    lv_port_sem_give();
+}
+
+static void _sen5x_status_handler(void *handler_args, esp_event_base_t base,
+                                   int32_t id, void *event_data)
+{
+    if (id != VIEW_EVENT_SEN5X_STATUS || !event_data) return;
+
+    struct view_data_sen5x_status *st = (struct view_data_sen5x_status *)event_data;
+    int state = _voc_state(st->voc_alert);
+    s_warming_up = st->warming_up;
+
+    lv_port_sem_take();
+    _update_voc_state(state, st->warming_up);
+
+    lv_port_sem_give();
+}
+
+/* ── Init ───────────────────────────────────────────────────────────────── */
+
+void view_sensor_init(void)
+{
+    lv_port_sem_take();
+    lv_obj_t *tile = nav_get_tile(NAV_TILE_SEN5X);
+    if (!tile) {
+        lv_port_sem_give();
+        ESP_LOGE(TAG, "SEN5X tile not initialised");
+        return;
+    }
+
+    /* No scroll needed: total content height ≈ 449 px < 480 px */
+    lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+
+    _create_header(tile);
+    _create_voc_card(tile);
+    for (size_t i = 0; i < N_CARDS; i++) {
+        _create_regular_card(tile, &s_cards[i]);
+    }
+
+    lv_port_sem_give();
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+        view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SENSOR_DATA,
+        view_event_update_present_sensorData, NULL, NULL));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+        view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_SEN5X_STATUS,
+        _sen5x_status_handler, NULL, NULL));
 }
