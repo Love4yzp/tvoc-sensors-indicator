@@ -17,6 +17,12 @@ typedef struct ha_sensor_entity {
     int qos;
 } ha_sensor_entity_t;
 
+/* ── Legacy HA sensor functions (SCD41/SGP40/SHT41 → HA topic publish) ──────
+ * Disabled: SEN54 now publishes via sen5x_mqtt.c using Sparkplug B protocol.
+ * Re-enable with -DLEGACY_HA_SENSORS if reverting to the old HA integration.
+ */
+#ifdef LEGACY_HA_SENSORS
+
 static ha_sensor_entity_t ha_sensor_entities[CONFIG_HA_SENSOR_ENTITY_NUM];
 
 static void publish_sensor_data(const struct view_data_sensor_data *sensor_data)
@@ -144,3 +150,16 @@ int ha_sensor_on_mqtt_data(const char *topic, int topic_len, const char *data, i
     cJSON_Delete(root);
     return -1;
 }
+
+#else /* LEGACY_HA_SENSORS not defined — provide no-op stubs */
+
+void ha_sensor_init(void) {}
+void ha_sensor_subscribe(esp_mqtt_client_handle_t client) { (void)client; }
+int  ha_sensor_on_mqtt_data(const char *topic, int topic_len,
+                             const char *data, int data_len)
+{
+    (void)topic; (void)topic_len; (void)data; (void)data_len;
+    return -1;
+}
+
+#endif /* LEGACY_HA_SENSORS */

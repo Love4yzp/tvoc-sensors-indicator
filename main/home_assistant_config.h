@@ -17,12 +17,12 @@ extern "C" {
 #endif
 
 
-// #define CONFIG_BROKER_URL                        "mqtt://homeassistant.local" /* domain */
-#define CONFIG_BROKER_URL                        "mqtt://broker.emqx.io" /* for receive testing */
-// #define CONFIG_BROKER_URL                        "mqtt://192.168.12.253" /* IPV4 */
-#define CONFIG_MQTT_CLIENT_ID                    "indicator-id"
-#define CONFIG_MQTT_USERNAME                     "indicator-usr"
-#define CONFIG_MQTT_PASSWORD                     "indicator-password"
+/* Default MQTT broker per Seeed protocol spec (seeed-mqtt.lan must resolve via LAN DNS).
+ * Override at runtime via the Settings UI → MQTT Broker IP. */
+#define CONFIG_BROKER_URL      "mqtt://seeed-mqtt.lan"
+#define CONFIG_MQTT_CLIENT_ID  "indicator-edge-01"
+#define CONFIG_MQTT_USERNAME   "sensor-node"
+#define CONFIG_MQTT_PASSWORD   "123"
 
 #define CONFIG_HA_SENSOR_ENTITY_NUM              6
 #define CONFIG_HA_SWITCH_ENTITY_NUM              8
