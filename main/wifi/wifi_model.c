@@ -3,6 +3,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -30,7 +31,25 @@ static struct indicator_wifi _g_wifi_model;
 static SemaphoreHandle_t _g_wifi_mutex;
 static SemaphoreHandle_t _g_data_mutex;
 static SemaphoreHandle_t _g_net_check_sem;
-static SemaphoreHandle_t _g_scan_req_sem;
+
+/* All blocking esp_wifi_* control ops (scan/connect/restore) run on a single
+ * worker task fed by this queue, NEVER on the view_event_handle loop. Running
+ * them on that loop stalls it for seconds; its fixed-size queue then fills and
+ * any portMAX_DELAY post back to it (from the loop itself or from the LVGL task
+ * while it holds the lvgl_port lock) blocks forever — which froze the whole UI
+ * after a connect. Off-loading keeps the loop draining so posts never block. */
+typedef enum {
+	WIFI_CMD_SCAN = 0,
+	WIFI_CMD_CONNECT,
+	WIFI_CMD_RESTORE,
+} wifi_cmd_type_t;
+
+typedef struct {
+	wifi_cmd_type_t type;
+	struct view_data_wifi_config cfg;  /* valid for WIFI_CMD_CONNECT */
+} wifi_cmd_t;
+
+static QueueHandle_t _g_wifi_cmd_q;
 
 static int s_retry_num = 0;
 static int wifi_retry_max = 3;
@@ -409,48 +428,57 @@ static void _do_scan_and_publish(void) {
 					  sizeof(struct view_data_wifi_list), portMAX_DELAY);
 }
 
-static void _wifi_scan_task(void* p_arg) {
+static void _wifi_cmd_task(void* p_arg) {
+	wifi_cmd_t cmd;
 	while(1)
 	{
-		xSemaphoreTake(_g_scan_req_sem, portMAX_DELAY);
-		_do_scan_and_publish();
+		if(xQueueReceive(_g_wifi_cmd_q, &cmd, portMAX_DELAY) != pdTRUE) continue;
+		switch(cmd.type)
+		{
+			case WIFI_CMD_SCAN:
+				_do_scan_and_publish();
+				break;
+			case WIFI_CMD_CONNECT:
+				_wifi_connect(cmd.cfg.ssid,
+							  cmd.cfg.have_password ? (const char*)cmd.cfg.password : NULL, 3);
+				break;
+			case WIFI_CMD_RESTORE:
+				_wifi_cfg_restore();
+				break;
+		}
 	}
 }
 
 static void _view_event_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data) {
 	switch(id)
 	{
+		/* These three cases run on the view_event_handle loop. They must NOT call
+		 * the blocking esp_wifi_* helpers directly — that would stall the loop and
+		 * can deadlock the UI (see the _g_wifi_cmd_q comment). Enqueue to the
+		 * worker non-blocking instead so the loop returns immediately. */
 		case VIEW_EVENT_WIFI_LIST_REQ:
+		{
 			ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_LIST_REQ");
-			/* Hand the blocking scan to _wifi_scan_task instead of running it
-			 * here. This handler executes on the view_event_handle loop task;
-			 * esp_wifi_scan_start(NULL, true) blocks for seconds, during which
-			 * the loop cannot drain its 10-slot queue. Once full, the
-			 * VIEW_EVENT_WIFI_LIST post below would block on portMAX_DELAY with
-			 * this handler as the only consumer — a self-deadlock that left the
-			 * scan spinner up forever. Off-loading keeps the loop free to drain
-			 * and dispatch the result. */
-			xSemaphoreGive(_g_scan_req_sem);
+			wifi_cmd_t cmd = { .type = WIFI_CMD_SCAN };
+			if(xQueueSend(_g_wifi_cmd_q, &cmd, 0) != pdTRUE)
+				ESP_LOGW(TAG, "wifi cmd queue full, dropped SCAN");
 			break;
+		}
 		case VIEW_EVENT_WIFI_CONNECT:
 		{
 			ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_CONNECT");
-			struct view_data_wifi_config* p_cfg = (struct view_data_wifi_config*)event_data;
-
-			if(p_cfg->have_password)
-			{
-				_wifi_connect(p_cfg->ssid, p_cfg->password, 3);
-			}
-			else
-			{
-				_wifi_connect(p_cfg->ssid, NULL, 3);
-			}
+			wifi_cmd_t cmd = { .type = WIFI_CMD_CONNECT };
+			memcpy(&cmd.cfg, event_data, sizeof(cmd.cfg));
+			if(xQueueSend(_g_wifi_cmd_q, &cmd, 0) != pdTRUE)
+				ESP_LOGW(TAG, "wifi cmd queue full, dropped CONNECT");
 			break;
 		}
 		case VIEW_EVENT_WIFI_CFG_DELETE:
 		{
 			ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_CFG_DELETE");
-			_wifi_cfg_restore();
+			wifi_cmd_t cmd = { .type = WIFI_CMD_RESTORE };
+			if(xQueueSend(_g_wifi_cmd_q, &cmd, 0) != pdTRUE)
+				ESP_LOGW(TAG, "wifi cmd queue full, dropped RESTORE");
 			break;
 		}
 		case VIEW_EVENT_SHUTDOWN:
@@ -468,12 +496,12 @@ int indicator_wifi_model_init(void) {
 	_g_wifi_mutex = xSemaphoreCreateMutex();
 	_g_data_mutex = xSemaphoreCreateMutex();
 	_g_net_check_sem = xSemaphoreCreateBinary();
-	_g_scan_req_sem = xSemaphoreCreateBinary();
+	_g_wifi_cmd_q = xQueueCreate(4, sizeof(wifi_cmd_t));
 
 	memset(&_g_wifi_model, 0, sizeof(_g_wifi_model));
 
 	xTaskCreate(&_indicator_wifi_task, "_indicator_wifi_task", 1024 * 5, NULL, 10, NULL);
-	xTaskCreate(&_wifi_scan_task, "_wifi_scan_task", 1024 * 5, NULL, 5, NULL);
+	xTaskCreate(&_wifi_cmd_task, "_wifi_cmd_task", 1024 * 5, NULL, 5, NULL);
 
 	ESP_ERROR_CHECK(esp_netif_init());
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
