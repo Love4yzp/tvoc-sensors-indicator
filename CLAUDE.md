@@ -26,20 +26,6 @@ Only needs rebuilding when `rp2040/` changes.
 ./dev rp2040 monitor     # 115200 baud
 ```
 
-### macOS SDL2 simulator (no hardware needed)
-
-Preview the LVGL UI on the host machine. Does not require ESP-IDF or physical hardware.
-
-```bash
-./dev sim build                    # CMake build only (sim/build/)
-./dev sim screenshot               # headless render → sim/sim.png
-./dev sim screenshot /tmp/out.png  # headless render → custom path
-./dev sim run                      # interactive SDL2 window
-```
-
-After any `*_view.c` or `*_screen.c` change, run `./dev sim screenshot` and read
-`sim/sim.png` to verify the UI before claiming success.
-
 ### Verification scripts
 
 Run these after any change before claiming success:

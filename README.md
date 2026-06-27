@@ -36,7 +36,6 @@ Firmware that turns the [Seeed Studio SenseCAP Indicator](https://www.seeedstudi
 - [x] MQTT broker configuration from the serial console (`setmqtt`, `mqtthelp`)
 - [x] NVS-backed persistence for Wi-Fi credentials, MQTT config, switch state
 - [x] Display brightness and sleep-mode controls
-- [x] PC simulator for iterating on the UI without flashing hardware
 - [ ] REST API
 - [ ] WebSocket
 
@@ -221,13 +220,6 @@ To regenerate `sdkconfig` from defaults: delete it and run `./dev build`.
 ## Development
 
 **Code completion.** Install [clangd](https://github.com/clangd/clangd/releases) and the [clangd VS Code extension](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd). After one successful build, `build/compile_commands.json` is generated and clangd uses it automatically for ESP-IDF-aware navigation.
-
-**PC simulator.** The `sim/` directory builds a desktop version of the UI using LVGL's SDL2 backend (macOS, 480×480 window matching the real LCD). Useful for iterating on screens, fonts, and layouts without flashing.
-
-```bash
-cmake -S sim -B sim/build && cmake --build sim/build -j4
-./sim/build/sensecap_sim
-```
 
 **Architecture rules.** See [`AGENTS.md`](AGENTS.md) for module locations, boot sequence, and the model/view boundary rules that contributors (human and AI) must follow.
 
