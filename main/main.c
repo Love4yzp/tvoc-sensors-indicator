@@ -53,7 +53,11 @@ void app_main(void) {
 	lv_port_init();
 
 	esp_event_loop_args_t view_event_task_args = {
-		.queue_size = 10,
+		/* Headroom for the Wi-Fi connect bring-up burst (WIFI_ST/GOT_IP/MQTT/
+		 * sensor) so UI posts are not dropped. UI-origin posts are non-blocking
+		 * (timeout 0) to prevent the lvgl-lock deadlock, so a too-small queue
+		 * would silently drop events like the post-connect list refresh. */
+		.queue_size = 16,
 		.task_name = "view_event_task",
 		.task_priority = uxTaskPriorityGet(NULL),
 		.task_stack_size = 10240,

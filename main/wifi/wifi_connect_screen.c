@@ -2,6 +2,7 @@
 #include <string.h>
 #include "wifi_connect_screen.h"
 #include "view_data.h"
+#include "ui_event.h"
 #include "esp_log.h"
 
 /* Re-declare only what this component needs from the asset set. */
@@ -16,6 +17,7 @@ struct wifi_connect_screen {
     lv_obj_t *join_btn;
     char       ssid[32];
     bool       password_ready;
+    wifi_connect_screen_dismiss_cb_t on_dismiss;
 };
 
 /* ── internal helpers ─────────────────────────────────────────────────── */
@@ -32,6 +34,9 @@ static void _dismiss(wifi_connect_screen_t *s) {
     }
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(lv_layer_top(), LV_OPA_TRANSP, 0);
+    /* Notify the owner before freeing so it drops its handle — otherwise its
+     * pointer dangles, blocking reopen and risking a use-after-free. */
+    if(s->on_dismiss) s->on_dismiss();
     free(s);
 }
 
@@ -60,8 +65,7 @@ static void _on_join(lv_event_t *e) {
         cfg.have_password = false;
     }
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CONNECT,
-                      &cfg, sizeof(cfg), portMAX_DELAY);
+    ui_event_post(VIEW_EVENT_WIFI_CONNECT, &cfg, sizeof(cfg));
 
     _dismiss(s);
 }
@@ -100,20 +104,20 @@ static void _on_delete(lv_event_t *e) {
     wifi_connect_screen_t *s = (wifi_connect_screen_t *)lv_event_get_user_data(e);
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_CFG_DELETE,
-                      NULL, 0, portMAX_DELAY);
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_LIST_REQ,
-                      NULL, 0, portMAX_DELAY);
+    ui_event_post(VIEW_EVENT_WIFI_CFG_DELETE, NULL, 0);
+    ui_event_post(VIEW_EVENT_WIFI_LIST_REQ, NULL, 0);
 
     _dismiss(s);
 }
 
 /* ── public API ───────────────────────────────────────────────────────── */
 
-wifi_connect_screen_t *wifi_connect_screen_show(const char *ssid, bool have_password) {
+wifi_connect_screen_t *wifi_connect_screen_show(const char *ssid, bool have_password,
+                                                wifi_connect_screen_dismiss_cb_t on_dismiss) {
     wifi_connect_screen_t *s = calloc(1, sizeof(wifi_connect_screen_t));
     if(!s) return NULL;
     strncpy(s->ssid, ssid, sizeof(s->ssid));
+    s->on_dismiss = on_dismiss;
 
     lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(lv_layer_top(), LV_OPA_COVER, 0);
@@ -186,10 +190,12 @@ wifi_connect_screen_t *wifi_connect_screen_show(const char *ssid, bool have_pass
     return s;
 }
 
-wifi_connect_screen_t *wifi_details_screen_show(const char *ssid) {
+wifi_connect_screen_t *wifi_details_screen_show(const char *ssid,
+                                                wifi_connect_screen_dismiss_cb_t on_dismiss) {
     wifi_connect_screen_t *s = calloc(1, sizeof(wifi_connect_screen_t));
     if(!s) return NULL;
     strncpy(s->ssid, ssid, sizeof(s->ssid));
+    s->on_dismiss = on_dismiss;
 
     lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(lv_layer_top(), LV_OPA_COVER, 0);

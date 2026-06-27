@@ -1,5 +1,6 @@
 #include "wifi_view.h"
 #include "esp_log.h"
+#include "ui_event.h"
 #include "wifi_list_screen.h"
 #include "wifi_connect_screen.h"
 #include "view_data.h"
@@ -116,8 +117,7 @@ static void _show_wifi_modal(void) {
     lv_obj_move_foreground(s_wifi_modal);
     wifi_list_screen_show_spinner(s_list_screen);
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_WIFI_LIST_REQ, NULL, 0, portMAX_DELAY);
+    ui_event_post(VIEW_EVENT_WIFI_LIST_REQ, NULL, 0);
 }
 
 static void _on_wifi_icon_clicked(lv_event_t *e) {
@@ -151,6 +151,13 @@ static void _ensure_wifi_status_icon(void) {
 
 /* ── list item tap callbacks (live here to access module state) ───────── */
 
+/* Cleared whenever the dialog closes (Cancel/Delete/Join/programmatic) so the
+ * handle never dangles — a stale non-NULL pointer would block reopening and a
+ * later Back would dismiss freed memory. */
+static void _on_connect_screen_dismissed(void) {
+    s_connect_screen = NULL;
+}
+
 static void _on_unconnected_tap(lv_event_t *e) {
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     if(lv_indev_get_type(lv_indev_active()) != LV_INDEV_TYPE_POINTER) return;
@@ -159,7 +166,7 @@ static void _on_unconnected_tap(lv_event_t *e) {
     lv_obj_t *btn = lv_event_get_target_obj(e);
     const char *ssid = wifi_list_screen_get_item_ssid(s_list_screen, btn);
     bool have_password = (lv_obj_get_child_cnt(btn) > 2);
-    s_connect_screen = wifi_connect_screen_show(ssid, have_password);
+    s_connect_screen = wifi_connect_screen_show(ssid, have_password, _on_connect_screen_dismissed);
 }
 
 static void _on_connected_tap(lv_event_t *e) {
@@ -169,7 +176,7 @@ static void _on_connected_tap(lv_event_t *e) {
 
     lv_obj_t *btn = lv_event_get_target_obj(e);
     const char *ssid = wifi_list_screen_get_item_ssid(s_list_screen, btn);
-    s_connect_screen = wifi_details_screen_show(ssid);
+    s_connect_screen = wifi_details_screen_show(ssid, _on_connect_screen_dismissed);
 }
 
 /* ── connection result toast ─────────────────────────────────────────── */
@@ -288,9 +295,8 @@ static void _view_event_handler(void *handler_args, esp_event_base_t base,
             lv_port_sem_give();
             if(!modal_visible) break;
 
-            /* Refresh list then show result toast. */
-            esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                              VIEW_EVENT_WIFI_LIST_REQ, NULL, 0, portMAX_DELAY);
+            /* Refresh the list, then show the result toast. */
+            ui_event_post(VIEW_EVENT_WIFI_LIST_REQ, NULL, 0);
 
             lv_port_sem_take();
             _show_connect_result(p_data);

@@ -100,6 +100,10 @@ build
 # PlatformIO
 .pio/
 
+# Python bytecode (scripts/, test helpers)
+__pycache__/
+*.pyc
+
 # Claude Code: ignore everything under .claude/ except project-shared skills.
 # Subagent worktrees, session state, etc. land here and shouldn't be committed.
 .claude/

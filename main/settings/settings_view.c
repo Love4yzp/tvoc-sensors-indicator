@@ -8,6 +8,7 @@
 #include "lv_port.h"
 #include "nav.h"
 #include "sdkconfig.h"
+#include "ui_event.h"
 #include "view_data.h"
 
 LV_FONT_DECLARE(lv_font_montserrat_20);
@@ -52,9 +53,7 @@ static void settings_hide_modal(void)
 
 static void settings_post_screen(enum start_screen screen)
 {
-	esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-					  VIEW_EVENT_SCREEN_START, &screen, sizeof(screen),
-					  portMAX_DELAY);
+	ui_event_post(VIEW_EVENT_SCREEN_START, &screen, sizeof(screen));
 }
 
 static void settings_open_wifi(lv_event_t *e)

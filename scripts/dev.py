@@ -5,7 +5,6 @@ Two independent toolchains live behind one CLI:
 
   * ESP32-S3 (default)  -> ESP-IDF `idf.py`.
   * RP2040 coprocessor  -> PlatformIO `pio` (thin passthrough run in rp2040/).
-  * Simulator (macOS)   -> CMake + SDL2, no hardware required.
 
 This module is a thin proxy and does NOT activate any environment itself.
 The repo-root `./dev` launcher handles ESP-IDF activation from $IDF_PATH; when
@@ -23,10 +22,6 @@ Usage (via the repo-root launcher):
     ./dev rp2040 build         # RP2040 (alias: ./dev rp ...)
     ./dev rp2040 upload
     ./dev rp2040 monitor
-
-    ./dev sim build            # build macOS SDL2 simulator (sim/build/)
-    ./dev sim run              # build + open interactive window
-    ./dev sim screenshot [out.png]  # build + headless screenshot (default: sim/sim.png)
 """
 
 from __future__ import annotations
@@ -40,8 +35,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build"
 RP2040_DIR = ROOT / "rp2040"
-SIM_DIR = ROOT / "sim"
-SIM_BUILD_DIR = ROOT / "sim" / "build"
 PYTHON_ENV_MISMATCH_MARKERS = (
     "is currently active in the environment while the project was configured with",
     "Run 'idf.py fullclean' to start again",
@@ -165,6 +158,54 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     return run_idf([*idf_args, "monitor"])
 
 
+# --- Automated test suite ----------------------------------------------------
+
+HOST_TEST_DIR = ROOT / "test" / "host"
+
+# Fast, hardware-free checks (pure Python; no ESP-IDF needed).
+_FAST_CHECKS = (
+    "check_event_post_safety.py",  # UI-freeze deadlock guard
+    "architecture_scan.py",        # domain boundary check
+    "test_sen5x_mqtt_protocol.py", # Sparkplug B payload unit tests
+)
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    rc = 0
+    for script in _FAST_CHECKS:
+        cmd = [sys.executable, str(ROOT / "scripts" / script)]
+        print("\n$ " + " ".join(cmd), flush=True)
+        if subprocess.run(cmd, cwd=ROOT).returncode != 0:
+            rc = 1
+
+    if args.no_host:
+        return rc
+
+    # ESP-IDF host unit test: real esp_event + POSIX FreeRTOS on the linux
+    # target. Proves ui_event_post() can never deadlock the UI. No hardware.
+    ensure_idf()  # only the host tests need ESP-IDF; fast checks ran already
+    if not (HOST_TEST_DIR / "sdkconfig").exists():
+        print("\n$ idf.py --preview set-target linux   # (in test/host/)", flush=True)
+        if subprocess.run(
+            ["idf.py", "--preview", "set-target", "linux"], cwd=HOST_TEST_DIR
+        ).returncode != 0:
+            return 1
+    print("\n$ idf.py build   # (in test/host/)", flush=True)
+    if subprocess.run(["idf.py", "build"], cwd=HOST_TEST_DIR).returncode != 0:
+        return 1
+    elf = HOST_TEST_DIR / "build" / "host_ui_event_test.elf"
+    print("\n$ " + str(elf), flush=True)
+    if subprocess.run([str(elf)], cwd=HOST_TEST_DIR).returncode != 0:
+        rc = 1
+
+    print("\n== test suite " + ("PASS" if rc == 0 else "FAIL") + " ==", flush=True)
+    return rc
+
+
+def ensure_none() -> None:
+    """The test command guards ESP-IDF itself (only for the host tests)."""
+
+
 # --- RP2040 (PlatformIO passthrough) -----------------------------------------
 
 def cmd_rp_build(args: argparse.Namespace) -> int:
@@ -183,79 +224,6 @@ def cmd_rp_monitor(args: argparse.Namespace) -> int:
     if args.port:
         pio_args += ["-p", args.port]
     return run_pio(pio_args)
-
-
-# --- Simulator (macOS SDL2) --------------------------------------------------
-
-def ensure_cmake() -> None:
-    if shutil.which("cmake"):
-        return
-    print(
-        "x cmake not found on PATH.\n"
-        "  Install it: brew install cmake",
-        file=sys.stderr,
-    )
-    raise SystemExit(127)
-
-
-def _sim_cmake_build() -> int:
-    """Configure (if needed) and build the simulator."""
-    if not SIM_BUILD_DIR.exists():
-        cmd = ["cmake", "-S", str(SIM_DIR), "-B", str(SIM_BUILD_DIR),
-               "-DCMAKE_BUILD_TYPE=Debug"]
-        print("$ " + " ".join(cmd), flush=True)
-        r = subprocess.run(cmd, cwd=ROOT)
-        if r.returncode != 0:
-            return r.returncode
-    import multiprocessing
-    jobs = str(multiprocessing.cpu_count())
-    cmd = ["cmake", "--build", str(SIM_BUILD_DIR), "--", f"-j{jobs}"]
-    print("$ " + " ".join(cmd), flush=True)
-    return subprocess.run(cmd, cwd=ROOT).returncode
-
-
-def cmd_sim_build(args: argparse.Namespace) -> int:
-    del args
-    return _sim_cmake_build()
-
-
-def cmd_sim_run(args: argparse.Namespace) -> int:
-    del args
-    rc = _sim_cmake_build()
-    if rc != 0:
-        return rc
-    exe = SIM_BUILD_DIR / "sensecap_sim"
-    print(f"$ {exe}", flush=True)
-    return subprocess.run([str(exe)]).returncode
-
-
-def cmd_sim_screenshot(args: argparse.Namespace) -> int:
-    rc = _sim_cmake_build()
-    if rc != 0:
-        return rc
-
-    import os
-    import tempfile
-
-    out_png = Path(args.output) if args.output else SIM_DIR / "sim.png"
-    bmp_path = Path(tempfile.mktemp(suffix=".bmp"))
-
-    exe = SIM_BUILD_DIR / "sensecap_sim"
-    env = {**os.environ, "SIM_SCREENSHOT": str(bmp_path)}
-    print(f"$ SIM_SCREENSHOT={bmp_path} {exe}", flush=True)
-    r = subprocess.run([str(exe)], env=env)
-    if r.returncode != 0 or not bmp_path.exists():
-        print("x simulator did not produce a screenshot", file=sys.stderr)
-        return 1
-
-    # Convert BMP → PNG via macOS sips (available on all macOS installs)
-    conv = ["sips", "-s", "format", "png", str(bmp_path), "--out", str(out_png)]
-    print("$ " + " ".join(conv), flush=True)
-    rc = subprocess.run(conv).returncode
-    bmp_path.unlink(missing_ok=True)
-    if rc == 0:
-        print(f"screenshot: {out_png}", flush=True)
-    return rc
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -312,22 +280,14 @@ def build_parser() -> argparse.ArgumentParser:
     rp_mon.add_argument("-p", "--port", help="serial port (default: platformio.ini)")
     rp_mon.set_defaults(func=cmd_rp_monitor, ensure=ensure_pio)
 
-    # Simulator (macOS SDL2), nested under `sim`
-    p_sim = sub.add_parser("sim", help="macOS SDL2 simulator (no hardware needed)")
-    sim_sub = p_sim.add_subparsers(dest="sim_command", required=True)
-
-    sim_build = sim_sub.add_parser("build", help="[sim] cmake build")
-    sim_build.set_defaults(func=cmd_sim_build, ensure=ensure_cmake)
-
-    sim_run = sim_sub.add_parser("run", help="[sim] build + open interactive window")
-    sim_run.set_defaults(func=cmd_sim_run, ensure=ensure_cmake)
-
-    sim_shot = sim_sub.add_parser("screenshot", help="[sim] build + headless screenshot")
-    sim_shot.add_argument(
-        "output", nargs="?",
-        help="output PNG path (default: sim/sim.png)",
+    p_test = sub.add_parser(
+        "test", help="run the automated test suite (guards + ESP-IDF host unit tests)"
     )
-    sim_shot.set_defaults(func=cmd_sim_screenshot, ensure=ensure_cmake)
+    p_test.add_argument(
+        "--no-host", action="store_true",
+        help="skip the ESP-IDF linux host unit tests (fast Python checks only)",
+    )
+    p_test.set_defaults(func=cmd_test, ensure=ensure_none)
 
     sub.add_parser("help", help="show this help message and exit")
 

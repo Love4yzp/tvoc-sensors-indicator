@@ -4,6 +4,7 @@
 #include "home_assistant_config.h"
 #include "lv_port.h"
 #include "nav.h"
+#include "ui_event.h"
 #include "view_data.h"
 
 #include <stdbool.h>
@@ -112,11 +113,7 @@ static void _post_switch_value(int index, int value)
     };
 
     ESP_LOGI(TAG, "switch%d: %d", index + 1, value);
-    esp_err_t err = esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_HA_SWITCH_ST,
-                                      &switch_data, sizeof(switch_data), portMAX_DELAY);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to post switch event: %s", esp_err_to_name(err));
-    }
+    ui_event_post(VIEW_EVENT_HA_SWITCH_ST, &switch_data, sizeof(switch_data));
 }
 
 static void _set_toggle_icon(switch_slot_t *slot, bool checked)

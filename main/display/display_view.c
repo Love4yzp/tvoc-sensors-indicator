@@ -10,6 +10,7 @@
 #include "display_model.h"
 #include "display_view.h"
 #include "lv_port.h"
+#include "ui_event.h"
 #include "view_data.h"
 #include <esp_log.h>
 #include "sdkconfig.h"
@@ -324,8 +325,7 @@ void brighness_cfg_event_cb(lv_event_t* e) // Value changed
 {
 	lv_obj_t* slider = lv_event_get_target_obj(e);
 	int32_t value = lv_slider_get_value(slider);
-	esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_BRIGHTNESS_UPDATE, &value,
-					  sizeof(value), portMAX_DELAY);
+	ui_event_post(VIEW_EVENT_BRIGHTNESS_UPDATE, &value, sizeof(value));
 }
 
 // static void _display_cfg_apply_event_cb(lv_event_t * e)
@@ -338,8 +338,7 @@ void display_cfg_apply_event_cb(lv_event_t* e) // defocused the textarea
 		return;
 	}
 	_display_cfg_from_widgets(&cfg);
-	esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_DISPLAY_CFG_APPLY, &cfg,
-					  sizeof(cfg), portMAX_DELAY);
+	ui_event_post(VIEW_EVENT_DISPLAY_CFG_APPLY, &cfg, sizeof(cfg));
 }
 
 void brighness_update_callback(lv_event_t* e) {
