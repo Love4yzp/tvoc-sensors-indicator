@@ -109,34 +109,38 @@ static void settings_on_gear(lv_event_t *e)
 	}
 }
 
-static void settings_style_card(lv_obj_t *card, lv_color_t color)
+/* Shared dark-card style matching the dashboard cards (sensor_view.c):
+ * 0x282828 base, radius 10, subtle lighter pressed state. The per-card accent
+ * colour is applied to the icon only, keeping one visual language app-wide. */
+static void settings_style_card(lv_obj_t *card)
 {
 	lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(card, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+	lv_obj_set_style_bg_color(card, lv_color_hex(0x282828), LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_bg_opa(card, LV_OPA_80, LV_PART_MAIN | LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(card, lv_color_hex(0x32383E), LV_PART_MAIN | LV_STATE_PRESSED);
+	lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_PRESSED);
 	lv_obj_set_style_border_width(card, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_radius(card, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+	lv_obj_set_style_radius(card, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_shadow_width(card, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_pad_all(card, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_text_color(card, lv_color_white(), LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
 static void settings_create_card(lv_obj_t *parent, int32_t x, int32_t y,
-								 lv_color_t color, const char *label,
+								 lv_color_t accent, const char *label,
 								 const char *icon, lv_event_cb_t cb)
 {
 	lv_obj_t *card = lv_button_create(parent);
 	lv_obj_set_size(card, 150, 150);
 	lv_obj_set_pos(card, x, y);
-	settings_style_card(card, color);
+	settings_style_card(card);
 	lv_obj_add_event_cb(card, cb, LV_EVENT_CLICKED, NULL);
 
 	lv_obj_t *icon_label = lv_label_create(card);
 	lv_label_set_text(icon_label, icon);
 	lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_28,
 							   LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_set_style_text_color(icon_label, lv_color_white(),
+	lv_obj_set_style_text_color(icon_label, accent,
 								LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_align(icon_label, LV_ALIGN_CENTER);
 	lv_obj_set_y(icon_label, -26);
@@ -261,17 +265,29 @@ static void settings_create_modal(void)
 						 lv_color_hex(0xEEBF41), "Display", LV_SYMBOL_IMAGE,
 						 settings_open_display);
 
+	/* Broker entry — same dark card language, full width under the two cards
+	 * (80..400 spans both), accent icon on the left. */
 	lv_obj_t *broker = lv_button_create(s_settings_modal);
-	lv_obj_set_size(broker, 300, 60);
-	lv_obj_set_pos(broker, 90, 330);
-	settings_style_card(broker, lv_color_hex(0xE66D39));
+	lv_obj_set_size(broker, 320, 64);
+	lv_obj_set_pos(broker, 80, 332);
+	settings_style_card(broker);
 	lv_obj_add_event_cb(broker, settings_open_broker, LV_EVENT_CLICKED, NULL);
 
+	lv_obj_t *broker_icon = lv_label_create(broker);
+	lv_label_set_text(broker_icon, LV_SYMBOL_EDIT);
+	lv_obj_set_style_text_font(broker_icon, &lv_font_montserrat_20,
+							   LV_PART_MAIN | LV_STATE_DEFAULT);
+	lv_obj_set_style_text_color(broker_icon, lv_color_hex(0xE66D39),
+								LV_PART_MAIN | LV_STATE_DEFAULT);
+	lv_obj_align(broker_icon, LV_ALIGN_LEFT_MID, 18, 0);
+
 	lv_obj_t *broker_label = lv_label_create(broker);
-	lv_label_set_text(broker_label, "Change MQTT Broker Address");
+	lv_label_set_text(broker_label, "Change MQTT Broker");
+	lv_obj_set_style_text_font(broker_label, &lv_font_montserrat_20,
+							   LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_text_color(broker_label, lv_color_white(),
 								LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_center(broker_label);
+	lv_obj_align(broker_label, LV_ALIGN_LEFT_MID, 52, 0);
 }
 
 int settings_view_init(void)

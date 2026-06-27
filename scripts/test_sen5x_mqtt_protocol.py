@@ -28,6 +28,11 @@ REQUIRED_METRICS = [
     "sen5x/voc_alert",
 ]
 
+# VOC Index and the derived alert level are integers; everything else is float.
+METRIC_TYPES = {name: "float" for name in REQUIRED_METRICS}
+METRIC_TYPES["sen5x/voc_index"] = "int"
+METRIC_TYPES["sen5x/voc_alert"] = "int"
+
 VOC_THR_LIGHT    = 120.0
 VOC_THR_MODERATE = 180.0
 VOC_THR_SEVERE   = 250.0
@@ -43,7 +48,7 @@ def make_dbirth(seq: int = 0, metrics_values: dict = None) -> dict:
         "seq": seq,
         "timestamp": int(time.time() * 1000),
         "metrics": [
-            {"name": name, "type": "float", "value": metrics_values.get(name, 0.0)}
+            {"name": name, "type": METRIC_TYPES[name], "value": metrics_values.get(name, 0.0)}
             for name in REQUIRED_METRICS
         ],
     }
@@ -118,7 +123,7 @@ class TestDBIRTH(unittest.TestCase):
     def test_metrics_have_type_field(self):
         for m in self.payload["metrics"]:
             self.assertIn("type", m, f"Metric {m['name']} missing 'type'")
-            self.assertEqual(m["type"], "float")
+            self.assertEqual(m["type"], METRIC_TYPES[m["name"]])
 
     def test_metrics_have_value_field(self):
         for m in self.payload["metrics"]:

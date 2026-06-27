@@ -129,17 +129,17 @@ The device publishes to a broker at `mqtt://seeed-mqtt.lan` (configurable via Se
 ```
 spBv1.0/seeed/NBIRTH/edge-01          — node birth
 spBv1.0/seeed/NDEATH/edge-01          — node death (LWT)
-spBv1.0/seeed/DBIRTH/edge-01/sen5x   — device birth (with "type":"float" per metric)
+spBv1.0/seeed/DBIRTH/edge-01/sen5x   — device birth (with per-metric "type")
 spBv1.0/seeed/DDATA/edge-01/sen5x    — data (no "type" field, every 5 s)
 ```
 
-DDATA carries 8 metrics: `sen5x/pm1_0`, `sen5x/pm2_5`, `sen5x/pm4_0`, `sen5x/pm10`, `sen5x/humidity`, `sen5x/temperature`, `sen5x/voc_index`, `sen5x/voc_alert`.
+DDATA carries 8 metrics: `sen5x/pm1_0`, `sen5x/pm2_5`, `sen5x/pm4_0`, `sen5x/pm10`, `sen5x/humidity`, `sen5x/temperature`, `sen5x/voc_index`, `sen5x/voc_alert`. PM/humidity/temperature are `"type":"float"`; `voc_index` and `voc_alert` are `"type":"int"`. Float values are rounded to sensor resolution (PM 1 dp, humidity/temperature 2 dp) so float32→double noise never reaches the wire. `seq` wraps 0–255. Timestamps are UTC epoch ms; the whole NBIRTH/DBIRTH/DDATA sequence is held back until the clock is NTP-synced so nothing carries a boot-relative timestamp (if MQTT connects before the clock syncs, birth is deferred and sent by the DDATA timer once time is valid).
 
 Implementation lives in `main/sen5x/sen5x_mqtt.c`. It is wired into `main/ha/ha_mqtt.c` (`indicator_ha_model_init` calls `sen5x_mqtt_init`).
 
 ### VOC alert and warming-up state
 
-`sen5x_mqtt.c` maintains a two-state machine (`WARMING_UP` → `ACTIVE`). The first 60 minutes after first boot is WARMING_UP; this is persisted via NVS (namespace `"sen5x"`, key `"warm_done"`) so controlled restarts skip the wait. During WARMING_UP, `voc_alert` is always 0.
+`sen5x_mqtt.c` maintains a two-state machine (`WARMING_UP` → `ACTIVE`). WARMING_UP runs for `SEN5X_WARMING_US` (15 min) on **every boot**, not just the first. Rationale: the SEN54's VOC Index algorithm lives inside the sensor and is cold-reset by `deviceReset()` on every RP2040/SEN54 (re)start — which also happens on every ESP32 reboot, since the ESP32 sends `CMD_POWER_ON` and the RP2040 re-runs `sensor_sen54_init()` → `deviceReset()`. So post-boot VOC readings are unreliable after any boot, and the window must re-run each time (it is intentionally **not** latched in NVS). During WARMING_UP, `voc_alert` is always 0.
 
 Lab VOC thresholds: 0 (≤120), 1 (121–180), 2 (181–250), 3 (>250).
 
@@ -157,15 +157,23 @@ Model files must not own LVGL objects.
 
 ### Navigation
 
-`main/nav/nav.h` defines tile indices. Current tiles:
+`main/nav/nav.h` defines tile indices. The UI is **single-tile**: the SEN54
+dashboard is the only tile. Settings, Wi-Fi, Display and Broker are modals on
+`lv_layer_top()` opened from on-screen buttons (gear / Wi-Fi icon) — there is no
+horizontal swipe.
 
 ```c
-#define NAV_TILE_SEN5X    0   // SEN54 sensor dashboard
-#define NAV_TILE_SETTINGS 1   // Settings
-#define NAV_TILE_COUNT    2   // MUST equal the number of tiles above
+#define NAV_TILE_SEN5X    0   // SEN54 sensor dashboard — the only tile
+#define NAV_TILE_COUNT    1
+// NAV_TILE_SETTINGS / NAV_TILE_HA_* are legacy aliases → NAV_TILE_SEN5X
 ```
 
-When adding a tile: bump `NAV_TILE_COUNT`, add the directory to `DIRECTORIES_TO_INCLUDE` in `main/CMakeLists.txt`, create `*_view.c`, and call its init from `indicator_view.c`.
+When adding a *modal* (most settings-style screens): build it on `lv_layer_top()`
+and open it from a button, following `settings_view.c`. Only add a real swipe
+tile if the product genuinely needs paged navigation — then bump `NAV_TILE_COUNT`,
+give tiles non-`LV_DIR_NONE` directions in `nav.c`, add the directory to
+`DIRECTORIES_TO_INCLUDE` in `main/CMakeLists.txt`, and call its init from
+`indicator_view.c`.
 
 ---
 

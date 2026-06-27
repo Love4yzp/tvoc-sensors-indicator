@@ -13,6 +13,7 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "esp_event.h"
+#include "esp_sntp.h"
 #include "ping/ping_sock.h"
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -131,6 +132,20 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 	}
 }
 
+/* Start SNTP once we first have an IP so the system clock syncs to real wall
+ * time. _timestamp_ms() (sen5x_mqtt.c) then reports true Unix ms instead of
+ * ms-since-boot. Sparkplug B timestamps are UTC epoch, so no timezone setup is
+ * needed for the payload. Requires the network to reach the NTP server. */
+static void _sntp_start_once(void) {
+	static bool started = false;
+	if(started) return;
+	esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+	esp_sntp_setservername(0, "pool.ntp.org");
+	esp_sntp_init();
+	started = true;
+	ESP_LOGI(TAG, "SNTP started (pool.ntp.org) — system time will sync shortly");
+}
+
 static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 	if(event_id == IP_EVENT_STA_GOT_IP)
 	{
@@ -138,6 +153,7 @@ static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
 		ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
 		s_retry_num = 0;
 
+		_sntp_start_once();
 		xSemaphoreGive(_g_net_check_sem);
 	}
 }

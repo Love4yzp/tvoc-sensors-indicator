@@ -30,9 +30,6 @@ static bool _wifi_modal_is_visible(void) {
     return s_wifi_modal && !lv_obj_has_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
-static bool s_discard_next_list = false;
-static bool s_wifi_scan_pending = false;
-
 static void _hide_wifi_modal(void) {
     if(s_connect_screen) {
         wifi_connect_screen_dismiss(s_connect_screen);
@@ -40,9 +37,6 @@ static void _hide_wifi_modal(void) {
     }
     if(s_wifi_modal) {
         lv_obj_add_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
-        if(s_wifi_scan_pending) {
-            s_discard_next_list = true;
-        }
     }
 }
 
@@ -122,7 +116,6 @@ static void _show_wifi_modal(void) {
     lv_obj_move_foreground(s_wifi_modal);
     wifi_list_screen_show_spinner(s_list_screen);
 
-    s_wifi_scan_pending = true;
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
                       VIEW_EVENT_WIFI_LIST_REQ, NULL, 0, portMAX_DELAY);
 }
@@ -227,11 +220,11 @@ static void _view_event_handler(void *handler_args, esp_event_base_t base,
             const void *src = &ui_img_wifi_disconet_png;
 
             if(p_st->is_connected) {
+                src = &ui_img_wifi_3_png;  /* connected: never show the disconnected icon */
                 switch(wifi_rssi_level_get(p_st->rssi)) {
                     case 1: src = &ui_img_wifi_1_png; break;
                     case 2: src = &ui_img_wifi_2_png; break;
-                    case 3: src = &ui_img_wifi_3_png; break;
-                    default: break;
+                    default: break;        /* level 3+ → full bars */
                 }
             }
 
@@ -268,18 +261,22 @@ static void _view_event_handler(void *handler_args, esp_event_base_t base,
             break;
 
         case VIEW_EVENT_WIFI_LIST: {
-            ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_LIST");
-            s_wifi_scan_pending = false;
-            if(s_discard_next_list) {
-                s_discard_next_list = false;
-                ESP_LOGI(TAG, "discard stale scan result (user backed out)");
-                break;
-            }
             struct view_data_wifi_list *p_list = (struct view_data_wifi_list *)event_data;
             lv_port_sem_take();
-            _ensure_wifi_modal();
-            wifi_list_screen_update(s_list_screen, p_list);
+            /* Render only while the modal is on screen. If the user backed out
+             * during the (blocking) scan, the late result is harmlessly
+             * ignored. Visibility is checked under the LVGL lock, so there is
+             * no cross-task race. (This replaced a pair of discard/pending
+             * bools that were touched from both the LVGL and esp_event tasks
+             * and could latch true, swallowing a legitimate scan result so the
+             * list never appeared.) */
+            bool visible = _wifi_modal_is_visible();
+            if(visible) {
+                wifi_list_screen_update(s_list_screen, p_list);
+            }
             lv_port_sem_give();
+            ESP_LOGI(TAG, "VIEW_EVENT_WIFI_LIST: cnt=%u modal_visible=%d -> %s",
+                     p_list->cnt, visible, visible ? "rendered" : "ignored (modal closed)");
             break;
         }
         case VIEW_EVENT_WIFI_CONNECT_RET: {

@@ -180,9 +180,16 @@ static void _ensure_display_modal(void) {
 
 	s_brightness_cfg = lv_slider_create(brightness_panel);
 	lv_slider_set_range(s_brightness_cfg, 1, 100);
-	lv_obj_set_size(s_brightness_cfg, 250, 10);
+	/* Taller track => larger knob (knob diameter is driven by LV_MIN(w,h));
+	 * combined with knob padding + ext_click_area this gives a finger-friendly
+	 * grab area. A 10px track made the knob tiny and nearly impossible to grab
+	 * under LVGL 9's knob-centered hit testing. */
+	lv_obj_set_size(s_brightness_cfg, 250, 24);
 	lv_obj_set_align(s_brightness_cfg, LV_ALIGN_CENTER);
 	lv_obj_set_y(s_brightness_cfg, 10);
+	lv_obj_set_style_radius(s_brightness_cfg, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+	lv_obj_set_style_pad_all(s_brightness_cfg, 8, LV_PART_KNOB | LV_STATE_DEFAULT);
+	lv_obj_set_ext_click_area(s_brightness_cfg, 16);
 	lv_obj_set_style_bg_color(s_brightness_cfg, lv_color_hex(0x363636),
 							  LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_bg_color(s_brightness_cfg, lv_color_hex(0x529D53),

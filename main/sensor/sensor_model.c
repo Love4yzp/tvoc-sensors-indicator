@@ -1,6 +1,6 @@
 #include "sensor_model.h"
+#include <string.h>
 #include "esp_log.h"
-#include "esp_sntp.h"
 #include "freertos/semphr.h"
 #include "rp2040.h"
 

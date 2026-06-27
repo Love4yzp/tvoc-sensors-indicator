@@ -40,7 +40,8 @@ int main(void) {
     indicator_display_view_init();
     view_sensor_init();
     indicator_wifi_view_init();
-    ha_switch_screen_create();
+    /* ha_switch_screen is legacy (LEGACY_HA, not built in the real firmware —
+     * see indicator_ha_view_init); the sim mirrors the shipping single-tile UI. */
     settings_view_init();
 
     const char *open_settings = getenv("SIM_OPEN_SETTINGS");

@@ -3,10 +3,12 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* Mirror the real firmware impl (main/util/indicator_util.c): max level is 3.
+ * wifi_view.c's icon switch only handles 1/2/3 — returning 4 here would fall to
+ * default and wrongly show the disconnected icon for a strong signal. */
 int wifi_rssi_level_get(int rssi) {
-    if (rssi >= -55) return 4;
-    if (rssi >= -67) return 3;
-    if (rssi >= -79) return 2;
+    if (rssi > -66) return 3;
+    if (rssi > -88) return 2;
     return 1;
 }
 

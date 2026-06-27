@@ -39,20 +39,22 @@ class UiGeometryTests(unittest.TestCase):
         self.assertIn("nav_style_base_obj(s_tileview)", text)
         self.assertNotIn("nav_style_static_obj(s_tileview)", text)
 
-    def test_tileview_disables_elastic_offset_without_blocking_edge_swipes(self) -> None:
+    def test_tileview_disables_elastic_offset(self) -> None:
         text = NAV.read_text()
 
         self.assertIn("LV_OBJ_FLAG_SCROLL_ELASTIC", text)
         self.assertIn("LV_OBJ_FLAG_SCROLL_MOMENTUM", text)
         self.assertIn("LV_OBJ_FLAG_SCROLL_CHAIN", text)
-        self.assertIn("LV_DIR_LEFT | LV_DIR_RIGHT", text)
+        # Single-tile UI: the one tile uses LV_DIR_NONE (no inter-tile swipe);
+        # settings etc. are gear/icon modals, not swipeable pages.
+        self.assertIn("LV_DIR_NONE", text)
         self.assertNotIn("nav_tile_scroll_dir", text)
 
     def test_settings_is_gear_modal_not_fourth_tile(self) -> None:
         nav_header = NAV_HEADER.read_text()
         settings_text = SETTINGS_VIEW.read_text()
 
-        self.assertIn("#define NAV_TILE_COUNT    3", nav_header)
+        self.assertIn("#define NAV_TILE_COUNT    1", nav_header)
         self.assertNotIn("NAV_TILE_SETTINGS", nav_header)
         self.assertIn("LV_SYMBOL_SETTINGS", settings_text)
         self.assertIn("lv_obj_set_align(button, LV_ALIGN_TOP_LEFT)", settings_text)
@@ -97,26 +99,25 @@ class UiGeometryTests(unittest.TestCase):
         self.assertIn("LV_STATE_PRESSED", text)
         self.assertIn('lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back")', text)
 
-    def test_wifi_back_during_scan_discards_late_scan_result(self) -> None:
+    def test_wifi_list_render_is_gated_on_modal_visibility_under_lock(self) -> None:
         text = WIFI_VIEW.read_text()
 
-        self.assertIn("static bool s_discard_next_list = false;", text)
-        self.assertIn("static bool s_wifi_scan_pending = false;", text)
-        self.assertIn("s_wifi_scan_pending = true;", text)
-        self.assertIn("s_wifi_scan_pending = false;", text)
-        self.assertIn("discard stale scan result", text)
-
-        hide_start = text.index("static void _hide_wifi_modal")
-        hide_end = text.index("static void _on_wifi_modal_back")
-        hide_body = text[hide_start:hide_end]
-        self.assertIn("if(s_wifi_scan_pending)", hide_body)
-        self.assertIn("s_discard_next_list = true;", hide_body)
+        # The brittle two-flag discard machine is gone. It was touched from two
+        # tasks (LVGL + esp_event) and could latch true, swallowing a real scan
+        # result so the list never rendered. Visibility (checked under the lock)
+        # is now the single gate.
+        self.assertNotIn("s_discard_next_list", text)
+        self.assertNotIn("s_wifi_scan_pending", text)
 
         list_case = text[text.index("case VIEW_EVENT_WIFI_LIST:"):]
-        self.assertLess(
-            list_case.index("if(s_discard_next_list)"),
-            list_case.index("wifi_list_screen_update"),
-        )
+        take = list_case.index("lv_port_sem_take();")
+        visible = list_case.index("_wifi_modal_is_visible()")
+        update = list_case.index("wifi_list_screen_update")
+        give = list_case.index("lv_port_sem_give();")
+        # update happens under the lock, only after the visibility check
+        self.assertLess(take, visible)
+        self.assertLess(visible, update)
+        self.assertLess(update, give)
 
 
 if __name__ == "__main__":
