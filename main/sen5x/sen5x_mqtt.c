@@ -51,9 +51,9 @@ static bool _clock_synced(void)
     return time(NULL) > 1000000000L;
 }
 
-static uint64_t _timestamp_ms(void)
+static uint64_t _timestamp_s(void)
 {
-    return (uint64_t)time(NULL) * 1000ULL;  /* UTC epoch ms — guard with _clock_synced() */
+    return (uint64_t)time(NULL);  /* UTC epoch seconds — guard with _clock_synced() */
 }
 
 /* Round in double space so float32→double widening noise (e.g. 4.2f becomes
@@ -85,7 +85,7 @@ static char *_build_payload(bool is_birth)
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "seq", (double)s_seq);
-    cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_ms());
+    cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_s());
 
     cJSON *metrics = cJSON_AddArrayToObject(root, "metrics");
     cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm1_0",       pm1_0,    1, "float", is_birth));
@@ -126,7 +126,7 @@ static void _publish_nbirth(void)
     if (!s_client) return;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "seq", 0);
-    cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_ms());
+    cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_s());
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (payload) {

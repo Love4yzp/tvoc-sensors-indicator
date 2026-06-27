@@ -46,7 +46,7 @@ def make_dbirth(seq: int = 0, metrics_values: dict = None) -> dict:
         metrics_values = {k: 0.0 for k in REQUIRED_METRICS}
     return {
         "seq": seq,
-        "timestamp": int(time.time() * 1000),
+        "timestamp": int(time.time()),  # UTC epoch seconds (see _timestamp_s in sen5x_mqtt.c)
         "metrics": [
             {"name": name, "type": METRIC_TYPES[name], "value": metrics_values.get(name, 0.0)}
             for name in REQUIRED_METRICS
@@ -60,7 +60,7 @@ def make_ddata(seq: int, metrics_values: dict = None) -> dict:
         metrics_values = {k: 0.0 for k in REQUIRED_METRICS}
     return {
         "seq": seq,
-        "timestamp": int(time.time() * 1000),
+        "timestamp": int(time.time()),  # UTC epoch seconds (see _timestamp_s in sen5x_mqtt.c)
         "metrics": [
             {"name": name, "value": metrics_values.get(name, 0.0)}
             for name in REQUIRED_METRICS

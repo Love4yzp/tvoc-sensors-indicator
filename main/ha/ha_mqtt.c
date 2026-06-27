@@ -26,14 +26,19 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_client_handle_t client = event->client;
 
     switch ((esp_mqtt_event_id_t)event_id) {
-        case MQTT_EVENT_CONNECTED:
+        case MQTT_EVENT_CONNECTED: {
+            /* Read the broker from persistent config. mqtt_cfg->broker.address.uri
+             * points into the stack frame of _mqtt_ha_start() — esp-mqtt copies the
+             * config strings into its own state at init, so that pointer is dangling
+             * by the time this connect event fires and logging it prints garbage. */
+            ha_cfg_interface cfg;
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED — broker=%s",
-                     (instance_ptr->mqtt_cfg && instance_ptr->mqtt_cfg->broker.address.uri)
-                         ? instance_ptr->mqtt_cfg->broker.address.uri : "?");
+                     (ha_cfg_get(&cfg) == ESP_OK) ? cfg.broker_url : "?");
             instance_ptr->mqtt_connected_flag = true;
             sen5x_mqtt_on_connect(client);
             /* LEGACY_HA: ha_sensor_subscribe(client); ha_switch_subscribe(client); */
             break;
+        }
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
             instance_ptr->mqtt_connected_flag = false;
