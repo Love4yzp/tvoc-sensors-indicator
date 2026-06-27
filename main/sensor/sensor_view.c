@@ -156,9 +156,9 @@ static void _create_voc_card(lv_obj_t *tile)
     lv_obj_align(st, LV_ALIGN_CENTER, 0, -23);
     s_voc_state_lbl = st;
 
-    /* ── 3 state segments (Poor=left, Moderate=center, Good=right) ── */
+    /* ── 3 state segments (Good=left, Moderate=center, Poor=right) ── */
     for (int i = 0; i < N_VOC_STATES; i++) {
-        int32_t sx = SEG_MARGIN + (N_VOC_STATES - 1 - i) * (SEG_W + SEG_GAP);
+        int32_t sx = SEG_MARGIN + i * (SEG_W + SEG_GAP);
 
         lv_obj_t *seg = lv_obj_create(card);
         lv_obj_set_size(seg, SEG_W, SEG_H);
