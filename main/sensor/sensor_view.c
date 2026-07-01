@@ -138,22 +138,20 @@ static void _create_voc_card(lv_obj_t *tile)
     lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
     lv_obj_set_pos(name, 14, 7);
 
-    /* ── Large numeric value — hidden until warm-up ends ── */
+    /* ── Large numeric value — always visible, dimmed during warm-up ── */
     lv_obj_t *val = lv_label_create(card);
     lv_label_set_text(val, "---");
     lv_obj_set_style_text_color(val, lv_color_hex(0x555555), 0);
     lv_obj_set_style_text_font(val, &lv_font_montserrat_36, 0);
     lv_obj_align(val, LV_ALIGN_CENTER, 0, -11);
-    lv_obj_add_flag(val, LV_OBJ_FLAG_HIDDEN);
     s_voc_value_lbl = val;
 
-    /* ── State label — "Calibrating" centered during warm-up,
-       moves to TOP_RIGHT with Good/Moderate/Poor after ── */
+    /* ── State label — small "stabilizing" hint during warm-up ── */
     lv_obj_t *st = lv_label_create(card);
-    lv_label_set_text(st, "Calibrating");
-    lv_obj_set_style_text_color(st, lv_color_hex(0xECBF41), 0);
-    lv_obj_set_style_text_font(st, &lv_font_montserrat_26, 0);
-    lv_obj_align(st, LV_ALIGN_CENTER, 0, -23);
+    lv_label_set_text(st, "stabilizing");
+    lv_obj_set_style_text_color(st, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(st, &lv_font_montserrat_14, 0);
+    lv_obj_align(st, LV_ALIGN_CENTER, 0, 20);
     s_voc_state_lbl = st;
 
     /* ── 3 state segments (Good=left, Moderate=center, Poor=right) ── */
@@ -217,15 +215,20 @@ static void _update_voc_state(int voc_state_idx, bool warming_up)
     }
 
     if (warming_up) {
-        /* Warm-up: large centered "Calibrating", value hidden */
+        /* Warm-up: show value dimmed, small "stabilizing" hint below */
         if (s_voc_state_lbl) {
-            lv_label_set_text(s_voc_state_lbl, "Calibrating");
-            lv_obj_set_style_text_color(s_voc_state_lbl, lv_color_hex(0xECBF41), 0);
-            lv_obj_align(s_voc_state_lbl, LV_ALIGN_CENTER, 0, -23);
+            lv_label_set_text(s_voc_state_lbl, "stabilizing");
+            lv_obj_set_style_text_color(s_voc_state_lbl, lv_color_hex(0x888888), 0);
+            lv_obj_set_style_text_font(s_voc_state_lbl, &lv_font_montserrat_14, 0);
+            lv_obj_align(s_voc_state_lbl, LV_ALIGN_CENTER, 0, 20);
+            lv_obj_remove_flag(s_voc_state_lbl, LV_OBJ_FLAG_HIDDEN);
         }
-        if (s_voc_value_lbl) lv_obj_add_flag(s_voc_value_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_voc_value_lbl) {
+            lv_obj_remove_flag(s_voc_value_lbl, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_text_color(s_voc_value_lbl, lv_color_hex(0x555555), 0);
+        }
     } else {
-        /* Active: centered numeric value; segments already show state via color+label */
+        /* Active: centered numeric value; segments show state via color+label */
         if (s_voc_state_lbl) lv_obj_add_flag(s_voc_state_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_voc_value_lbl) {
             lv_obj_set_style_text_color(s_voc_value_lbl,
@@ -246,15 +249,13 @@ void view_event_update_present_sensorData(void *handler_args, esp_event_base_t b
     struct view_data_sensor_data *p = (struct view_data_sensor_data *)event_data;
     if (!p) return;
 
-    /* VOC value update — suppress during warm-up (sensor outputs 0 and is unreliable) */
+    /* VOC value update — always show value; color reflects warm-up state */
     if (p->sensor_type == SEN54_SENSOR_VOC_IDX) {
-        if (!s_warming_up) {
-            char buf[BUF_SIZE];
-            snprintf(buf, sizeof(buf), "%.0f", p->value);
-            lv_port_sem_take();
-            if (s_voc_value_lbl) lv_label_set_text(s_voc_value_lbl, buf);
-            lv_port_sem_give();
-        }
+        char buf[BUF_SIZE];
+        snprintf(buf, sizeof(buf), "%.0f", p->value);
+        lv_port_sem_take();
+        if (s_voc_value_lbl) lv_label_set_text(s_voc_value_lbl, buf);
+        lv_port_sem_give();
         return;
     }
 
