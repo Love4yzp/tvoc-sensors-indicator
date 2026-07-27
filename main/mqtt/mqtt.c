@@ -40,11 +40,10 @@ static void mqtt_start_interface(const instance_mqtt *instance, enum MQTT_APP_EV
         return;
     }
 
-    if (flag == MQTT_APP_RESTART && instance->mqtt_client) {
-        esp_mqtt_client_stop(instance->mqtt_client);
-        esp_mqtt_client_destroy(instance->mqtt_client);
-    }
-
+    /* No client teardown here: instance->mqtt_starter() (_mqtt_ha_start)
+     * stops/destroys/NULLs any existing client itself. Destroying the client
+     * here without clearing instance->mqtt_client would make the starter
+     * operate on an already-freed handle (use-after-free). */
     instance->mqtt_starter(instance);
 }
 

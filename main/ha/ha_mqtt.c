@@ -100,21 +100,18 @@ static void view_event_handler(void *handler_args, esp_event_base_t base, int32_
 static void _cfg_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
     switch (id) {
+        case HA_CFG_BROKER_CHANGED:
+            ESP_LOGI(TAG, "event: HA_CFG_BROKER_CHANGED: %s",
+                     event_data ? (const char *)event_data : "?");
+            /* fall through */
         case HA_CFG_SET:
-            ESP_LOGI(TAG, "event: HA_CFG_BROKER_SET");
+            /* Restart through the MQTT app loop: it recreates the client from
+             * the NVS config via _mqtt_ha_start(), which is NULL-safe and also
+             * picks up credential changes. Calling esp_mqtt_client_set_uri()
+             * here directly crashes when the client was never created (e.g. no
+             * network at confirm time) and silently ignores new credentials. */
             esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE, MQTT_APP_RESTART, &instance_ptr, sizeof(instance_mqtt_t), portMAX_DELAY);
             break;
-        case HA_CFG_BROKER_CHANGED: {
-            if (!event_data) {
-                break;
-            }
-            const char *broker_url = (const char *)event_data;
-            ESP_LOGI(TAG, "HA_CFG_BROKER_CHANGED: %s", broker_url);
-            esp_mqtt_client_stop(instance_ptr->mqtt_client);
-            esp_mqtt_client_set_uri(instance_ptr->mqtt_client, broker_url);
-            esp_mqtt_client_start(instance_ptr->mqtt_client);
-            break;
-        }
         default:
             break;
     }
