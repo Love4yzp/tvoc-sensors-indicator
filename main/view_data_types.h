@@ -229,7 +229,9 @@ enum {
     /* P: btn/btn.c, display/display_model.c  Payload: bool (0=off, 1=on) */
     VIEW_EVENT_SCREEN_CTRL,
 
-    /* P: ha/ha_config.c  C: ha/ha_config.c  Payload: NULL (reads textarea directly) */
+    /* P: none (broker Confirm button saves inline — posting this to ourselves
+     * with portMAX_DELAY from the LVGL task could freeze the UI)
+     * C: ha/ha_config.c  Payload: NULL (reads textarea directly) */
     VIEW_EVENT_MQTT_ADDR_CHANGED,
 
     /* P: ha/ha_mqtt.c  C: ha/ha_config.c  Payload: NULL */

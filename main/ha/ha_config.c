@@ -101,6 +101,8 @@ static void _on_broker_keyboard_done(lv_event_t *e)
 
 /* ── confirm & save ──────────────────────────────────────────────────────── */
 
+static void handle_mqtt_config_save(void);
+
 /* Helper: style a textarea consistently with the dark theme */
 static void _style_textarea(lv_obj_t *ta)
 {
@@ -122,14 +124,19 @@ static void _on_broker_confirm(lv_event_t *e)
         return;
     }
 
-    esp_event_post_to(view_event_handle, VIEW_EVENT_BASE,
-                      VIEW_EVENT_MQTT_ADDR_CHANGED, NULL, 0, portMAX_DELAY);
+    /* This callback runs on the LVGL task. Save directly instead of posting
+     * VIEW_EVENT_MQTT_ADDR_CHANGED to our own view handler with
+     * portMAX_DELAY — if the view queue were full, the LVGL task would block
+     * forever and the whole UI would freeze. */
+    handle_mqtt_config_save();
 }
 
 static void handle_mqtt_config_save(void)
 {
     const char *new_ip = s_broker_ip_textarea ?
         lv_textarea_get_text(s_broker_ip_textarea) : "";
+    const char *new_port = s_broker_port_textarea ?
+        lv_textarea_get_text(s_broker_port_textarea) : "";
     const char *new_client_id = s_broker_client_id_textarea ?
         lv_textarea_get_text(s_broker_client_id_textarea) : "";
     const char *new_username = s_broker_username_textarea ?

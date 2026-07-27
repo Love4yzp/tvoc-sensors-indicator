@@ -182,8 +182,11 @@ static void _on_connected_tap(lv_event_t *e) {
 /* ── connection result toast ─────────────────────────────────────────── */
 
 static lv_obj_t *s_result_toast = NULL;
+static lv_timer_t *s_result_toast_timer = NULL;
 
 static void _toast_close_cb(lv_timer_t *timer) {
+    /* Timer has repeat_count 1 and deletes itself after this run. */
+    s_result_toast_timer = NULL;
     if(s_result_toast) {
         lv_obj_delete(s_result_toast);
         s_result_toast = NULL;
@@ -193,6 +196,19 @@ static void _toast_close_cb(lv_timer_t *timer) {
 }
 
 static void _show_connect_result(struct view_data_wifi_connet_ret_msg *p_msg) {
+    /* A second result can arrive before the first toast closed (e.g. failure
+     * then a retry success). Retire the old toast and its timer first —
+     * otherwise the stale timer fires against the new toast, deleting it
+     * early and double-resetting layer_top. */
+    if(s_result_toast_timer) {
+        lv_timer_delete(s_result_toast_timer);
+        s_result_toast_timer = NULL;
+    }
+    if(s_result_toast) {
+        lv_obj_delete(s_result_toast);
+        s_result_toast = NULL;
+    }
+
     s_result_toast = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_result_toast, 300, 150);
     lv_obj_set_align(s_result_toast, LV_ALIGN_CENTER);
@@ -203,8 +219,8 @@ static void _show_connect_result(struct view_data_wifi_connet_ret_msg *p_msg) {
     lv_label_set_text(msg, p_msg->msg);
     lv_obj_set_align(msg, LV_ALIGN_CENTER);
 
-    lv_timer_t *timer = lv_timer_create(_toast_close_cb, 1500, NULL);
-    lv_timer_set_repeat_count(timer, 1);
+    s_result_toast_timer = lv_timer_create(_toast_close_cb, 1500, NULL);
+    lv_timer_set_repeat_count(s_result_toast_timer, 1);
 }
 
 /* ── event handler ───────────────────────────────────────────────────── */

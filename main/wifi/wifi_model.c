@@ -179,11 +179,32 @@ static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
 }
 
 static int _wifi_scan(wifi_ap_record_t* p_ap_info, uint16_t number) {
-	uint16_t ap_count;
-	esp_wifi_scan_start(NULL, true);
+	uint16_t ap_count = 0;
 
-	ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
-	ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&number, p_ap_info));
+	/* esp_wifi_scan_start fails when the station is mid-(re)connect — the
+	 * common case when the user opens the Wi-Fi screen right after boot while
+	 * the saved-AP connect is still retrying. Never ESP_ERROR_CHECK these:
+	 * abort() reboots the device and shows up as the "black screen" freeze.
+	 * Report 0 APs instead so the UI renders an empty list and stays alive. */
+	esp_err_t err = esp_wifi_scan_start(NULL, true);
+	if(err != ESP_OK)
+	{
+		ESP_LOGW(TAG, "wifi scan start failed: %s", esp_err_to_name(err));
+		return 0;
+	}
+
+	err = esp_wifi_scan_get_ap_num(&ap_count);
+	if(err != ESP_OK)
+	{
+		ESP_LOGW(TAG, "wifi scan get ap num failed: %s", esp_err_to_name(err));
+		return 0;
+	}
+	err = esp_wifi_scan_get_ap_records(&number, p_ap_info);
+	if(err != ESP_OK)
+	{
+		ESP_LOGW(TAG, "wifi scan get ap records failed: %s", esp_err_to_name(err));
+		return 0;
+	}
 	ESP_LOGI(TAG, "Total APs scanned = %u, actual AP number ap_info holds = %u", ap_count, number);
 
 	for(int i = 0; (i < number) && (i < ap_count); i++)
@@ -254,8 +275,12 @@ static void _wifi_shutdown(void) {
 	st.is_network = false;
 	_wifi_st_set(&st);
 
+	/* Runs on the view_event loop (VIEW_EVENT_SHUTDOWN handler), so this is a
+	 * post to our own queue: portMAX_DELAY here self-deadlocks the loop when
+	 * the queue is full, freezing the whole UI. The screen is going off
+	 * anyway, so a dropped status update is harmless. */
 	esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st, sizeof(struct view_data_wifi_st),
-					  portMAX_DELAY);
+					  0);
 
 	esp_wifi_stop();
 }

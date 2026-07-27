@@ -55,12 +55,15 @@ static void _on_join(lv_event_t *e) {
 
     struct view_data_wifi_config cfg;
     memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.ssid, s->ssid, sizeof(cfg.ssid));
+    /* sizeof(...)-1: keep the NUL the memset provided — a full-length
+     * SSID/password would otherwise leave the buffer unterminated and the
+     * model's ESP_LOGI("%s")/strlcpy would read past the end. */
+    strncpy(cfg.ssid, s->ssid, sizeof(cfg.ssid) - 1);
 
     if(s->kb != NULL && s->password_input != NULL) {
         cfg.have_password = true;
         const char *pw = lv_textarea_get_text(s->password_input);
-        strncpy((char *)cfg.password, pw, sizeof(cfg.password));
+        strncpy((char *)cfg.password, pw, sizeof(cfg.password) - 1);
     } else {
         cfg.have_password = false;
     }
@@ -116,7 +119,7 @@ wifi_connect_screen_t *wifi_connect_screen_show(const char *ssid, bool have_pass
                                                 wifi_connect_screen_dismiss_cb_t on_dismiss) {
     wifi_connect_screen_t *s = calloc(1, sizeof(wifi_connect_screen_t));
     if(!s) return NULL;
-    strncpy(s->ssid, ssid, sizeof(s->ssid));
+    strncpy(s->ssid, ssid, sizeof(s->ssid) - 1); /* keep calloc'd NUL */
     s->on_dismiss = on_dismiss;
 
     lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
@@ -169,6 +172,7 @@ wifi_connect_screen_t *wifi_connect_screen_show(const char *ssid, bool have_pass
         s->password_input = lv_textarea_create(s->container);
         lv_textarea_set_text(s->password_input, "");
         lv_textarea_set_one_line(s->password_input, true);
+        lv_textarea_set_max_length(s->password_input, 63); /* view_data_wifi_config.password is 64 B */
         lv_obj_set_width(s->password_input, lv_pct(80));
         lv_obj_set_align(s->password_input, LV_ALIGN_TOP_MID);
         lv_obj_set_y(s->password_input, 130);
@@ -194,7 +198,7 @@ wifi_connect_screen_t *wifi_details_screen_show(const char *ssid,
                                                 wifi_connect_screen_dismiss_cb_t on_dismiss) {
     wifi_connect_screen_t *s = calloc(1, sizeof(wifi_connect_screen_t));
     if(!s) return NULL;
-    strncpy(s->ssid, ssid, sizeof(s->ssid));
+    strncpy(s->ssid, ssid, sizeof(s->ssid) - 1); /* keep calloc'd NUL */
     s->on_dismiss = on_dismiss;
 
     lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
