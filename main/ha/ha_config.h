@@ -11,7 +11,7 @@ extern "C" {
 
 typedef struct {
     char broker_url[128];
-    char client_id[16];
+    char client_id[32];
     char username[32];
     char password[64];
 } ha_cfg_interface;

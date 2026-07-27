@@ -368,7 +368,7 @@ static void _ensure_broker_modal(void)
     s_broker_client_id_textarea = lv_textarea_create(s_form_container);
     lv_obj_set_size(s_broker_client_id_textarea, 420, 40);
     lv_obj_set_pos(s_broker_client_id_textarea, 0, y + ROW_INPUT_Y);
-    lv_textarea_set_max_length(s_broker_client_id_textarea, 15);
+    lv_textarea_set_max_length(s_broker_client_id_textarea, 31);
     lv_textarea_set_placeholder_text(s_broker_client_id_textarea, "indicator-edge-01");
     lv_textarea_set_one_line(s_broker_client_id_textarea, true);
     _style_textarea(s_broker_client_id_textarea);
