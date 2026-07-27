@@ -30,7 +30,7 @@ static void print_mqtt_usage(void) {
     printf("    setmqtt --addr mqtt://192.168.1.10:1883\n");
     printf("    setmqtt --addr mqtt://broker.emqx.io\n\n");
     printf("  Notes:\n");
-    printf("    - The screen MQTT page only asks for the broker IP. It builds mqtt://<ip>:1883.\n");
+    printf("    - The screen MQTT page asks for the broker IP and port (default 1883). It builds mqtt://<ip>:<port>.\n");
     printf("    - Restart is automatic after setmqtt succeeds.\n\n");
     printf("MQTT topics and payloads\n");
     printf("  Sensor data from device:\n");

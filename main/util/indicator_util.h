@@ -17,7 +17,9 @@ bool isValidDomain(const char *input);
 
 bool is_valid_ipv4(const char* ip_address);
 bool extract_ip_from_url(const char* url, char* ip, size_t ip_size);
-void assemble_broker_url(const char* ip_address, char* broker_url, size_t broker_url_size);
+bool extract_port_from_url(const char* url, char* port, size_t port_size);
+/* port may be NULL/"" → default 1883 */
+void assemble_broker_url(const char* ip_address, const char* port, char* broker_url, size_t broker_url_size);
 
 #ifdef __cplusplus
 }

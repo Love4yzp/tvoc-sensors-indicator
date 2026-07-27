@@ -86,11 +86,48 @@ bool extract_ip_from_url(const char* url, char* ip, size_t ip_size) {
 	return false;
 }
 
-void assemble_broker_url(const char* ip_address, char* broker_url, size_t broker_url_size) {
-	const char* prefix = "mqtt://"; // MQTT Protocol prefix
-	const char* suffix = ":1883"; // MQTT The default port
-	//const char* suffix = ""; // The default port
+bool extract_port_from_url(const char* url, char* port, size_t port_size) {
+	if(!url || !port || port_size == 0)
+	{
+		return false;
+	}
 
-	// 组装成完整的 broker URL，确保总长度不超过目标数组的大小
-	snprintf(broker_url, broker_url_size, "%s%s%s", prefix, ip_address, suffix);
+	/* Skip the scheme ("mqtt://") if present, then look for ":<digits>" at
+	 * the end. No port in the URL means the MQTT default (1883) applies —
+	 * report false and let the caller substitute it. */
+	const char* host = strstr(url, "://");
+	host = host ? host + 3 : url;
+
+	const char* colon = strrchr(host, ':');
+	if(!colon || colon[1] == '\0')
+	{
+		return false;
+	}
+
+	const char* digits = colon + 1;
+	for(const char* c = digits; *c; c++)
+	{
+		if(*c < '0' || *c > '9')
+		{
+			return false;
+		}
+	}
+
+	size_t len = strlen(digits);
+	if(len >= port_size)
+	{
+		return false;
+	}
+	memcpy(port, digits, len + 1);
+	return true;
+}
+
+#define MQTT_DEFAULT_PORT "1883"
+
+void assemble_broker_url(const char* ip_address, const char* port, char* broker_url, size_t broker_url_size) {
+	if(!port || port[0] == '\0')
+	{
+		port = MQTT_DEFAULT_PORT;
+	}
+	snprintf(broker_url, broker_url_size, "mqtt://%s:%s", ip_address, port);
 }

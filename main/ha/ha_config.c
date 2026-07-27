@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 
 #include "ha_config.h"
 #include "ha_mqtt.h"
@@ -16,6 +17,7 @@ static const char *TAG = "ha-config";
 
 static lv_obj_t *s_broker_modal               = NULL;
 static lv_obj_t *s_broker_ip_textarea          = NULL;
+static lv_obj_t *s_broker_port_textarea        = NULL;
 static lv_obj_t *s_broker_client_id_textarea   = NULL;
 static lv_obj_t *s_broker_username_textarea    = NULL;
 static lv_obj_t *s_broker_password_textarea    = NULL;
@@ -77,8 +79,8 @@ static void _on_textarea_focused(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     lv_keyboard_set_textarea(s_broker_keyboard, ta);
 
-    /* Switch keyboard mode: number for IP, text for everything else */
-    if (ta == s_broker_ip_textarea) {
+    /* Switch keyboard mode: number for IP/port, text for everything else */
+    if (ta == s_broker_ip_textarea || ta == s_broker_port_textarea) {
         lv_keyboard_set_mode(s_broker_keyboard, LV_KEYBOARD_MODE_NUMBER);
     } else {
         lv_keyboard_set_mode(s_broker_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
@@ -151,11 +153,25 @@ static void handle_mqtt_config_save(void)
         return;
     }
 
+    /* Empty port falls back to the MQTT default 1883 */
+    if (new_port[0] == '\0') {
+        new_port = "1883";
+    }
+
+    /* Validate port: digits only (textarea already enforces this), 1–65535 */
+    char *end = NULL;
+    long port_num = strtol(new_port, &end, 10);
+    if (end == new_port || *end != '\0' || port_num < 1 || port_num > 65535) {
+        ESP_LOGE(TAG, "Invalid MQTT port: %s", new_port);
+        show_message_box("Invalid port (1-65535)", lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+
     ha_cfg_interface ha_cfg;
     ha_cfg_get(&ha_cfg);
 
     char broker_url[MAX_BROKER_URL_LEN];
-    assemble_broker_url(new_ip, broker_url, sizeof(broker_url));
+    assemble_broker_url(new_ip, new_port, broker_url, sizeof(broker_url));
 
     if (strlcpy(ha_cfg.broker_url, broker_url, sizeof(ha_cfg.broker_url))
         >= sizeof(ha_cfg.broker_url)) {
@@ -294,7 +310,7 @@ static void _ensure_broker_modal(void)
                                LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_pos(addr_label, 0, y + ROW_LABEL_Y);
 
-    /* Row: "mqtt://" + textarea + ":1883" */
+    /* Row: "mqtt://" + IP textarea + ":" + port textarea */
     lv_obj_t *prefix = lv_label_create(s_form_container);
     lv_label_set_text(prefix, "mqtt://");
     lv_obj_set_style_text_color(prefix, lv_color_hex(0x9E9E9E),
@@ -304,7 +320,7 @@ static void _ensure_broker_modal(void)
     lv_obj_set_pos(prefix, 0, y + ROW_INPUT_Y + 12);
 
     s_broker_ip_textarea = lv_textarea_create(s_form_container);
-    lv_obj_set_size(s_broker_ip_textarea, 265, 40);
+    lv_obj_set_size(s_broker_ip_textarea, 258, 40);
     lv_obj_set_pos(s_broker_ip_textarea, 62, y + ROW_INPUT_Y);
     lv_textarea_set_accepted_chars(s_broker_ip_textarea, "0123456789.");
     lv_textarea_set_max_length(s_broker_ip_textarea, 20);
@@ -316,13 +332,27 @@ static void _ensure_broker_modal(void)
     lv_obj_add_event_cb(s_broker_ip_textarea, _on_broker_keyboard_done,
                         LV_EVENT_DEFOCUSED, NULL);
 
-    lv_obj_t *suffix = lv_label_create(s_form_container);
-    lv_label_set_text(suffix, ":1883");
-    lv_obj_set_style_text_color(suffix, lv_color_hex(0x9E9E9E),
+    lv_obj_t *colon = lv_label_create(s_form_container);
+    lv_label_set_text(colon, ":");
+    lv_obj_set_style_text_color(colon, lv_color_hex(0x9E9E9E),
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(suffix, &lv_font_montserrat_14,
+    lv_obj_set_style_text_font(colon, &lv_font_montserrat_14,
                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_pos(suffix, 335, y + ROW_INPUT_Y + 12);
+    lv_obj_set_pos(colon, 326, y + ROW_INPUT_Y + 12);
+
+    /* Port — default 1883, editable (1–65535) */
+    s_broker_port_textarea = lv_textarea_create(s_form_container);
+    lv_obj_set_size(s_broker_port_textarea, 82, 40);
+    lv_obj_set_pos(s_broker_port_textarea, 338, y + ROW_INPUT_Y);
+    lv_textarea_set_accepted_chars(s_broker_port_textarea, "0123456789");
+    lv_textarea_set_max_length(s_broker_port_textarea, 5);
+    lv_textarea_set_placeholder_text(s_broker_port_textarea, "1883");
+    lv_textarea_set_one_line(s_broker_port_textarea, true);
+    _style_textarea(s_broker_port_textarea);
+    lv_obj_add_event_cb(s_broker_port_textarea, _on_textarea_focused,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_broker_port_textarea, _on_broker_keyboard_done,
+                        LV_EVENT_DEFOCUSED, NULL);
 
     y += ROW_HEIGHT;
 
@@ -443,6 +473,16 @@ static void update_config_fields(const ha_cfg_interface *ha_cfg)
         } else {
             ESP_LOGE(TAG, "Failed to extract IP from URL: %s", ha_cfg->broker_url);
             lv_textarea_set_text(s_broker_ip_textarea, "");
+        }
+    }
+
+    if (s_broker_port_textarea) {
+        char port[8];
+        /* No port in the stored URL means the MQTT default 1883 */
+        if (extract_port_from_url(ha_cfg->broker_url, port, sizeof(port))) {
+            lv_textarea_set_text(s_broker_port_textarea, port);
+        } else {
+            lv_textarea_set_text(s_broker_port_textarea, "1883");
         }
     }
 
