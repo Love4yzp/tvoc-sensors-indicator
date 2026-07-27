@@ -120,7 +120,7 @@ menu "Board Configuration"
     config LCD_TASK_PRIORITY
         depends on LCD_AVOID_TEAR
         int "Priority of lcd refresh task"
-        default 5
+        default 8
 
     config LCD_TASK_REFRESH_TIME
         depends on LCD_AVOID_TEAR

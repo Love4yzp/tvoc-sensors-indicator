@@ -101,8 +101,8 @@ esp_err_t ft5x06_init(void)
 
     esp_err_t ret_val = ESP_OK;
 
-    // Valid touching detect threshold
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THGROUP, 70);
+    // Valid touching detect threshold (lower = more sensitive to light touches)
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THGROUP, 50);
 
     // valid touching peak detect threshold
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THPEAK, 60);
@@ -119,14 +119,16 @@ esp_err_t ft5x06_init(void)
     // Touch difference threshold
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THDIFF, 20);
 
-    // Delay to enter 'Monitor' status (s)
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_TIME_ENTER_MONITOR, 2);
+    // Delay to enter 'Monitor' status (s). Keep the panel in fast 'Active' mode
+    // across short typing pauses so the first tap after a pause is not delayed.
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_TIME_ENTER_MONITOR, 10);
 
     // Period of 'Active' status (ms)
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODACTIVE, 12);
 
-    // Timer to enter 'idle' when in 'Monitor' (ms)
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODMONITOR, 40);
+    // Timer to enter 'idle' when in 'Monitor' (ms). 20ms report period halves
+    // the worst-case latency of a tap that arrives while in Monitor mode.
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODMONITOR, 20);
 
     return ESP_OK;
 }
