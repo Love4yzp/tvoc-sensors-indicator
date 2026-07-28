@@ -112,3 +112,6 @@ __pycache__/
 # ESP-IDF Component Manager downloads — fetched from idf_component.yml on build.
 managed_components/
 docs/
+
+# Flasher upload credentials (sourced by scripts/upload_to_flasher.sh)
+.flasher.env

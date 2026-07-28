@@ -9,8 +9,9 @@
 # 环境变量:
 #   FLASHER_URL       服务地址          (默认 https://flasher.love4yzpcat.heiyu.space,
 #                      即懒猫网关国内入口; 也可用 https://flasher.love4yzp.me)
-#   FLASHER_USER      管理账号          (默认 admin)
-#   FLASHER_PASSWORD  管理密码          (必填)
+#   FLASHER_USER      管理账号          (默认 spencer)
+#   FLASHER_PASSWORD  管理密码          (必填；可写进仓库根目录的 .flasher.env,
+#                      该文件已在 .gitignore 中，不会提交)
 #   FLASHER_PROJECT   项目 id           (默认当前目录名的小写连字符形式)
 #   FLASHER_NAME      项目显示名        (默认同 PROJECT，仅创建时生效)
 #   FLASHER_FIRMWARE  固件类型 id       (默认 app)
@@ -22,8 +23,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 本地凭据文件（不提交）：FLASHER_USER=... / FLASHER_PASSWORD=...
+[[ -f .flasher.env ]] && source .flasher.env
+
 BASE="${FLASHER_URL:-https://flasher.love4yzpcat.heiyu.space}"
-USER="${FLASHER_USER:-admin}"
+USER="${FLASHER_USER:-spencer}"
 PASS="${FLASHER_PASSWORD:?请设置 FLASHER_PASSWORD}"
 PROJECT="${FLASHER_PROJECT:-$(basename "$PWD" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g;s/^-//;s/-$//')}"
 FIRMWARE="${FLASHER_FIRMWARE:-app}"
