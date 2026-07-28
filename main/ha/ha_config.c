@@ -13,6 +13,15 @@
 
 #define MAX_BROKER_URL_LEN 128
 
+/* Keyboard is pinned to the bottom of the 480px-high modal; the form
+ * container starts at y=90. When the keyboard is up, shrink the form so
+ * its bottom edge stays above the keyboard and the focused field can be
+ * scrolled into the visible strip instead of being covered. */
+#define FORM_TOP_Y       90
+#define FORM_FULL_HEIGHT 395
+#define KEYBOARD_HEIGHT  240
+#define FORM_KBD_HEIGHT  (CONFIG_LCD_EVB_SCREEN_HEIGHT - KEYBOARD_HEIGHT - FORM_TOP_Y)
+
 static const char *TAG = "ha-config";
 
 static lv_obj_t *s_broker_modal               = NULL;
@@ -49,11 +58,24 @@ static void show_message_box(const char *message, lv_color_t color)
 
 /* ── modal visibility ────────────────────────────────────────────────────── */
 
-static void _hide_broker_modal(void)
+static void _set_keyboard_visible(bool visible)
 {
     if (s_broker_keyboard) {
-        lv_obj_add_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
+        if (visible) {
+            lv_obj_remove_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
+        }
     }
+    if (s_form_container) {
+        lv_obj_set_height(s_form_container,
+                          visible ? FORM_KBD_HEIGHT : FORM_FULL_HEIGHT);
+    }
+}
+
+static void _hide_broker_modal(void)
+{
+    _set_keyboard_visible(false);
     if (s_broker_modal) {
         lv_obj_add_flag(s_broker_modal, LV_OBJ_FLAG_HIDDEN);
     }
@@ -86,7 +108,12 @@ static void _on_textarea_focused(lv_event_t *e)
         lv_keyboard_set_mode(s_broker_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
     }
 
-    lv_obj_remove_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
+    _set_keyboard_visible(true);
+
+    /* Keep the focused field above the keyboard: the form container was just
+     * shrunk to the visible strip, so scrolling the textarea into view also
+     * lifts it clear of the keyboard. */
+    lv_obj_scroll_to_view_recursive(ta, LV_ANIM_ON);
 }
 
 static void _on_broker_keyboard_done(lv_event_t *e)
@@ -96,9 +123,7 @@ static void _on_broker_keyboard_done(lv_event_t *e)
         return;
     }
 
-    if (s_broker_keyboard) {
-        lv_obj_add_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
-    }
+    _set_keyboard_visible(false);
 }
 
 /* ── confirm & save ──────────────────────────────────────────────────────── */
@@ -125,6 +150,10 @@ static void _on_broker_confirm(lv_event_t *e)
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
+
+    /* Close the keyboard and restore the full-height form before saving so
+     * the result message box is not covered. */
+    _set_keyboard_visible(false);
 
     /* This callback runs on the LVGL task. Save directly instead of posting
      * VIEW_EVENT_MQTT_ADDR_CHANGED to our own view handler with
@@ -281,9 +310,9 @@ static void _ensure_broker_modal(void)
 
     /* ── Scrollable form container (480 - 85 = 395 px tall) ── */
     s_form_container = lv_obj_create(s_broker_modal);
-    lv_obj_set_size(s_form_container, 420, 395);
+    lv_obj_set_size(s_form_container, 420, FORM_FULL_HEIGHT);
     lv_obj_set_align(s_form_container, LV_ALIGN_TOP_MID);
-    lv_obj_set_y(s_form_container, 90);
+    lv_obj_set_y(s_form_container, FORM_TOP_Y);
     lv_obj_set_style_bg_opa(s_form_container, LV_OPA_TRANSP,
                             LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_opa(s_form_container, LV_OPA_TRANSP,
@@ -447,7 +476,7 @@ static void _ensure_broker_modal(void)
     s_broker_keyboard = lv_keyboard_create(s_broker_modal);
     lv_keyboard_set_mode(s_broker_keyboard, LV_KEYBOARD_MODE_NUMBER);
     lv_keyboard_set_textarea(s_broker_keyboard, s_broker_ip_textarea);
-    lv_obj_set_size(s_broker_keyboard, 480, 240);
+    lv_obj_set_size(s_broker_keyboard, 480, KEYBOARD_HEIGHT);
     lv_obj_set_align(s_broker_keyboard, LV_ALIGN_BOTTOM_MID);
     lv_obj_add_flag(s_broker_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_broker_keyboard, _on_broker_keyboard_done,
@@ -508,6 +537,13 @@ static void _show_broker_modal(void)
     ha_cfg_interface ha_cfg;
     ha_cfg_get(&ha_cfg);
     update_config_fields(&ha_cfg);
+
+    /* Always reopen in a clean state: keyboard down, full-height form,
+     * scrolled back to the top. */
+    _set_keyboard_visible(false);
+    if (s_form_container) {
+        lv_obj_scroll_to_y(s_form_container, 0, LV_ANIM_OFF);
+    }
 
     if (s_broker_modal) {
         lv_obj_remove_flag(s_broker_modal, LV_OBJ_FLAG_HIDDEN);
