@@ -101,8 +101,10 @@ esp_err_t ft5x06_init(void)
 
     esp_err_t ret_val = ESP_OK;
 
-    // Valid touching detect threshold (lower = more sensitive to light touches)
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THGROUP, 50);
+    // Valid touching detect threshold (lower = more sensitive to light touches).
+    // Keep at 70: 50 was tried and caused idle phantom touches at the panel
+    // corners, which opened the settings/Wi-Fi modals without user input.
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THGROUP, 70);
 
     // valid touching peak detect threshold
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THPEAK, 60);
