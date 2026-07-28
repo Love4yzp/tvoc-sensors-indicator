@@ -97,7 +97,7 @@ struct sensor_data_minmax {
  *     X(SHT41_SENSOR_HUMIDITY, "SHT41_HUMIDITY")
  */
 
-/* SEN54: metric names match Sparkplug B payload field names */
+/* SEN54: names match the MQTT data payload metric names */
 #define SENSOR_TYPE_LIST                                      \
     X(SEN54_SENSOR_PM1_0,    "sen5x/pm1_0")                  \
     X(SEN54_SENSOR_PM2_5,    "sen5x/pm2_5")                  \
@@ -249,7 +249,7 @@ enum {
 
     /* P: sen5x/sen5x_mqtt.c  C: sensor/sensor_view.c
      * Payload: struct view_data_sen5x_status
-     * Posted on WARMING_UP→ACTIVE transition and each DDATA publish. */
+     * Posted on WARMING_UP→ACTIVE transition and each data publish. */
     VIEW_EVENT_SEN5X_STATUS,
 
     VIEW_EVENT_ALL,

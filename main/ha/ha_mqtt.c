@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "ha.h"
 #include "home_assistant_config.h"
@@ -19,6 +20,14 @@ static instance_mqtt_t instance_ptr = &mqtt_ha_instance;
 
 static void _mqtt_ha_start(instance_mqtt *instance);
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
+
+void mqtt_topics_build(const ha_cfg_interface *cfg,
+                       char *data, size_t data_sz,
+                       char *status, size_t status_sz)
+{
+    snprintf(data, data_sz, "%s/%s/data", cfg->topic_prefix, cfg->device_name);
+    snprintf(status, status_sz, "%s/%s/status", cfg->topic_prefix, cfg->device_name);
+}
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
@@ -140,18 +149,38 @@ static void _mqtt_ha_start(instance_mqtt *instance)
         return;
     }
 
+    /* Topics live in static storage: hf_cfg is a stack local and the LWT topic
+     * pointer handed to esp-mqtt must not dangle. (esp-mqtt copies the config
+     * strings at init, but keeping these static also lets sen5x publish to the
+     * same buffers' layout via mqtt_topics_build.) */
+    static char s_data_topic[MQTT_TOPIC_MAX_LEN];
+    static char s_status_topic[MQTT_TOPIC_MAX_LEN];
+    mqtt_topics_build(&hf_cfg, s_data_topic, sizeof(s_data_topic),
+                      s_status_topic, sizeof(s_status_topic));
+
     instance->mqtt_cfg = (esp_mqtt_client_config_t *)malloc(sizeof(esp_mqtt_client_config_t));
     *instance->mqtt_cfg = (esp_mqtt_client_config_t){
         .broker.address.uri = hf_cfg.broker_url,
         .credentials.client_id = hf_cfg.client_id,
         .credentials.username = hf_cfg.username,
         .credentials.authentication.password = hf_cfg.password,
+        /* Broker publishes retained "offline" if the device drops
+         * unexpectedly; on connect sen5x_mqtt publishes retained "online" to
+         * the same status topic. */
+        .session.last_will = {
+            .topic   = s_status_topic,
+            .msg     = "offline",
+            .msg_len = 7,
+            .qos     = 0,
+            .retain  = true,
+        },
     };
 
     ESP_LOGI(TAG, "| Broker Address               | %-40s |", hf_cfg.broker_url);
     ESP_LOGI(TAG, "| Client ID                    | %-40s |", hf_cfg.client_id);
     ESP_LOGI(TAG, "| username                     | %-40s |", hf_cfg.username);
-    ESP_LOGI(TAG, "| password                     | %-40s |", hf_cfg.password);
+    ESP_LOGI(TAG, "| Data topic                   | %-40s |", s_data_topic);
+    ESP_LOGI(TAG, "| Status topic (LWT)           | %-40s |", s_status_topic);
 
     instance->mqtt_client = esp_mqtt_client_init(instance->mqtt_cfg);
     if (instance->mqtt_client == NULL) {

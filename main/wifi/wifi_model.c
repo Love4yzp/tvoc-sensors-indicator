@@ -153,9 +153,9 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 }
 
 /* Start SNTP once we first have an IP so the system clock syncs to real wall
- * time. _timestamp_ms() (sen5x_mqtt.c) then reports true Unix ms instead of
- * ms-since-boot. Sparkplug B timestamps are UTC epoch, so no timezone setup is
- * needed for the payload. Requires the network to reach the NTP server. */
+ * time. _timestamp_s() (sen5x_mqtt.c) then reports true Unix epoch seconds
+ * instead of seconds-since-boot. Payload timestamps are UTC epoch, so no
+ * timezone setup is needed. Requires the network to reach the NTP server. */
 static void _sntp_start_once(void) {
 	static bool started = false;
 	if(started) return;

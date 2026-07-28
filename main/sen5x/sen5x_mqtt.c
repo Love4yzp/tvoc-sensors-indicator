@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "ha_config.h"
+#include "ha_mqtt.h"
 #include "sensor_model.h"
 #include "view_data.h"
 
@@ -23,10 +25,15 @@ typedef enum {
 static volatile sen5x_state_t s_state       = SEN5X_STATE_WARMING_UP;
 static esp_mqtt_client_handle_t s_client    = NULL;
 static uint32_t                 s_seq       = 0;
-static bool                     s_birth_sent = false;  /* birth announced with a valid timestamp on the current connection */
+
+/* Runtime-built protocol topics and device identity, refreshed on every
+ * connect from the NVS config. */
+static char s_data_topic[MQTT_TOPIC_MAX_LEN];
+static char s_status_topic[MQTT_TOPIC_MAX_LEN];
+static char s_device_name[32];
 
 static esp_timer_handle_t s_warming_timer;
-static esp_timer_handle_t s_ddata_timer;
+static esp_timer_handle_t s_data_timer;
 
 /* ── VOC alert ───────────────────────────────────────────────────────────── */
 
@@ -45,7 +52,7 @@ static int _voc_alert(float voc_index)
 
 /* Wall-clock is "synced" once it is past 2001-09-09, i.e. NTP has set it.
  * Before that, time(NULL) returns seconds-since-boot, which is not a valid
- * Unix epoch and must never be serialized as a Sparkplug timestamp. */
+ * Unix epoch and must never be serialized as a data timestamp. */
 static bool _clock_synced(void)
 {
     return time(NULL) > 1000000000L;
@@ -59,20 +66,16 @@ static uint64_t _timestamp_s(void)
 /* Round in double space so float32→double widening noise (e.g. 4.2f becomes
  * 4.19999980926514) never leaks into the JSON, and clamp to the sensor's real
  * resolution. `decimals` of 0 yields a clean integer ("104", not "104.0"). */
-static cJSON *_make_metric(const char *name, double value, int decimals,
-                           const char *type, bool include_type)
+static cJSON *_make_metric(const char *name, double value, int decimals)
 {
     cJSON *m = cJSON_CreateObject();
     cJSON_AddStringToObject(m, "name", name);
-    if (include_type) {
-        cJSON_AddStringToObject(m, "type", type);
-    }
     double scale = pow(10.0, decimals);
     cJSON_AddNumberToObject(m, "value", round(value * scale) / scale);
     return m;
 }
 
-static char *_build_payload(bool is_birth)
+static char *_build_payload(void)
 {
     float pm1_0    = get_sensor_float_value(SEN54_SENSOR_PM1_0);
     float pm2_5    = get_sensor_float_value(SEN54_SENSOR_PM2_5);
@@ -86,16 +89,17 @@ static char *_build_payload(bool is_birth)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "seq", (double)s_seq);
     cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_s());
+    cJSON_AddStringToObject(root, "device", s_device_name);
 
     cJSON *metrics = cJSON_AddArrayToObject(root, "metrics");
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm1_0",       pm1_0,    1, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm2_5",       pm2_5,    1, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm4_0",       pm4_0,    1, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm10",        pm10,     1, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/humidity",    humidity, 2, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/temperature", temp,     2, "float", is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/voc_index",   voc_idx,  0, "int",   is_birth));
-    cJSON_AddItemToArray(metrics, _make_metric("sen5x/voc_alert",   alert,    0, "int",   is_birth));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm1_0",       pm1_0,    1));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm2_5",       pm2_5,    1));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm4_0",       pm4_0,    1));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/pm10",        pm10,     1));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/humidity",    humidity, 2));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/temperature", temp,     2));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/voc_index",   voc_idx,  0));
+    cJSON_AddItemToArray(metrics, _make_metric("sen5x/voc_alert",   alert,    0));
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -108,78 +112,40 @@ static char *_build_payload(bool is_birth)
  * sends without needing the protocol spec: topic + size + broker msg_id on
  * every publish (QoS 0 never fires MQTT_EVENT_PUBLISHED, so the returned
  * msg_id is the only publish-time signal). Full JSON payload goes to DEBUG
- * level to keep the 5 s DDATA cadence from flooding the default log. */
-static int _pub(const char *topic, const char *payload)
+ * level to keep the 5 s data cadence from flooding the default log. */
+static int _pub(const char *topic, const char *payload, int retain)
 {
-    int id = esp_mqtt_client_publish(s_client, topic, payload, 0, 0, 0);
+    int id = esp_mqtt_client_publish(s_client, topic, payload, 0, 0, retain);
     if (id < 0) {
         ESP_LOGW(TAG, "PUB %s FAILED to enqueue (disconnected?) ret=%d", topic, id);
     } else {
-        ESP_LOGI(TAG, "PUB %s (%d bytes) msg_id=%d", topic, (int)strlen(payload), id);
+        ESP_LOGI(TAG, "PUB %s (%d bytes)%s msg_id=%d", topic, (int)strlen(payload),
+                 retain ? " [retained]" : "", id);
         ESP_LOGD(TAG, "     payload=%s", payload);
     }
     return id;
 }
 
-static void _publish_nbirth(void)
-{
-    if (!s_client) return;
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "seq", 0);
-    cJSON_AddNumberToObject(root, "timestamp", (double)_timestamp_s());
-    char *payload = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (payload) {
-        _pub(SEN5X_TOPIC_NBIRTH, payload);
-        free(payload);
-    }
-}
-
-static void _publish_dbirth(void)
-{
-    if (!s_client) return;
-    s_seq = 0;
-    char *payload = _build_payload(true);
-    if (payload) {
-        _pub(SEN5X_TOPIC_DBIRTH, payload);
-        free(payload);
-    }
-    s_seq = (s_seq + 1) & 0xFFu;  /* Sparkplug seq wraps 0–255 */
-}
-
-/* NBIRTH+DBIRTH establish the session; both carry a timestamp, so they must
- * wait for NTP just like DDATA. Call only when _clock_synced() is true. */
-static void _publish_birth(void)
-{
-    _publish_nbirth();
-    _publish_dbirth();
-    s_birth_sent = true;
-}
-
-static void _publish_ddata(void)
+static void _publish_data(void)
 {
     if (!s_client) return;
 
     /* Never publish a fabricated timestamp: a wrong epoch is worse than a
-     * missing message. Hold the entire birth+data sequence until NTP has set
-     * the clock. The UI status update below still runs, so the on-screen VOC
+     * missing message. Data publishes are held until NTP has set the clock
+     * (the retained "online" status on connect is NOT gated — it carries no
+     * timestamp). The UI status update below still runs, so the on-screen VOC
      * alert keeps working on networks without time sync. */
     if (_clock_synced()) {
-        /* Announce the session with a valid timestamp before the first sample
-         * (handles the case where MQTT connected before the clock synced). */
-        if (!s_birth_sent) {
-            _publish_birth();
-        }
-        char *payload = _build_payload(false);
+        char *payload = _build_payload();
         if (payload) {
-            _pub(SEN5X_TOPIC_DDATA, payload);
+            _pub(s_data_topic, payload, 0);
             free(payload);
-            s_seq = (s_seq + 1) & 0xFFu;  /* Sparkplug seq wraps 0–255 */
+            s_seq = (s_seq + 1) & 0xFFu;  /* seq wraps 0–255 so consumers can spot gaps */
         }
     } else {
         static bool warned = false;
         if (!warned) {
-            ESP_LOGW(TAG, "Clock not NTP-synced yet — holding NBIRTH/DBIRTH/DDATA to avoid bad timestamps");
+            ESP_LOGW(TAG, "Clock not NTP-synced yet — holding data publishes to avoid bad timestamps");
             warned = true;
         }
     }
@@ -206,9 +172,9 @@ static void _warming_timer_cb(void *arg)
                       &status, sizeof(status), 0);
 }
 
-static void _ddata_timer_cb(void *arg)
+static void _data_timer_cb(void *arg)
 {
-    _publish_ddata();
+    _publish_data();
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
@@ -231,38 +197,47 @@ void sen5x_mqtt_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&warming_args, &s_warming_timer));
     ESP_ERROR_CHECK(esp_timer_start_once(s_warming_timer, SEN5X_WARMING_US));
 
-    /* Periodic DDATA timer — starts after first MQTT connect */
-    esp_timer_create_args_t ddata_args = {
-        .callback = _ddata_timer_cb,
-        .name     = "sen5x_ddata",
+    /* Periodic data timer — starts after first MQTT connect */
+    esp_timer_create_args_t data_args = {
+        .callback = _data_timer_cb,
+        .name     = "sen5x_data",
     };
-    ESP_ERROR_CHECK(esp_timer_create(&ddata_args, &s_ddata_timer));
+    ESP_ERROR_CHECK(esp_timer_create(&data_args, &s_data_timer));
 }
 
 void sen5x_mqtt_on_connect(esp_mqtt_client_handle_t client)
 {
     s_client = client;
 
-    /* Announce immediately only if the clock is already valid; otherwise the
-     * DDATA timer sends NBIRTH+DBIRTH as soon as NTP syncs, so every birth
-     * carries a real UTC timestamp instead of a boot-relative one. */
-    s_birth_sent = false;
-    if (_clock_synced()) {
-        _publish_birth();
+    /* Resolve the device identity and topics from the NVS config on every
+     * connect so a Settings/console change takes effect on reconnect. The
+     * returned struct always carries effective values (defaults filled in by
+     * ha_cfg_get), even when the NVS read itself reported an error. */
+    ha_cfg_interface cfg;
+    esp_err_t err = ha_cfg_get(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ha_cfg_get err:%d — publishing with default identity", err);
     }
+    mqtt_topics_build(&cfg, s_data_topic, sizeof(s_data_topic),
+                      s_status_topic, sizeof(s_status_topic));
+    strlcpy(s_device_name, cfg.device_name, sizeof(s_device_name));
 
-    if (!esp_timer_is_active(s_ddata_timer)) {
-        ESP_ERROR_CHECK(esp_timer_start_periodic(s_ddata_timer, SEN5X_DDATA_INTERVAL_US));
+    /* Announce presence immediately: retained "online" on the status topic.
+     * Not NTP-gated — it carries no timestamp. The matching "offline" is the
+     * broker-published LWT configured in _mqtt_ha_start(). */
+    _pub(s_status_topic, "online", 1);
+
+    if (!esp_timer_is_active(s_data_timer)) {
+        ESP_ERROR_CHECK(esp_timer_start_periodic(s_data_timer, SEN5X_DATA_INTERVAL_US));
     }
-    ESP_LOGI(TAG, "MQTT connected — DDATA timer running%s",
-             s_birth_sent ? ", NBIRTH+DBIRTH sent" : " (birth deferred until NTP sync)");
+    ESP_LOGI(TAG, "MQTT connected — data %s, status %s (online published)",
+             s_data_topic, s_status_topic);
 }
 
 void sen5x_mqtt_on_disconnect(void)
 {
     s_client = NULL;
-    s_birth_sent = false;  /* re-announce on the next connection */
-    if (esp_timer_is_active(s_ddata_timer)) {
-        esp_timer_stop(s_ddata_timer);
+    if (esp_timer_is_active(s_data_timer)) {
+        esp_timer_stop(s_data_timer);
     }
 }

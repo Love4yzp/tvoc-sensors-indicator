@@ -1,5 +1,7 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
+#include <stdio.h>
 
 #include "ha_config.h"
 #include "ha_mqtt.h"
@@ -9,9 +11,15 @@
 #include "lv_port.h"
 #include "indicator_util.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_netif.h"
 #include "sdkconfig.h"
 
 #define MAX_BROKER_URL_LEN 128
+
+/* NVS blobs written by firmware before device_name/topic_prefix existed hold
+ * only the first four fields (128+32+32+64 = 256 bytes). */
+#define HA_CFG_LEGACY_SIZE  offsetof(ha_cfg_interface, device_name)
 
 /* Keyboard is pinned to the bottom of the 480px-high modal; the form
  * container starts at y=90. When the keyboard is up, shrink the form so
@@ -24,14 +32,60 @@
 
 static const char *TAG = "ha-config";
 
-static lv_obj_t *s_broker_modal               = NULL;
-static lv_obj_t *s_broker_ip_textarea          = NULL;
-static lv_obj_t *s_broker_port_textarea        = NULL;
-static lv_obj_t *s_broker_client_id_textarea   = NULL;
-static lv_obj_t *s_broker_username_textarea    = NULL;
-static lv_obj_t *s_broker_password_textarea    = NULL;
-static lv_obj_t *s_broker_keyboard             = NULL;
-static lv_obj_t *s_form_container              = NULL;
+static lv_obj_t *s_broker_modal                 = NULL;
+static lv_obj_t *s_broker_ip_textarea           = NULL;
+static lv_obj_t *s_broker_port_textarea         = NULL;
+static lv_obj_t *s_broker_device_name_textarea  = NULL;
+static lv_obj_t *s_broker_topic_prefix_textarea = NULL;
+static lv_obj_t *s_broker_username_textarea     = NULL;
+static lv_obj_t *s_broker_password_textarea     = NULL;
+static lv_obj_t *s_broker_keyboard              = NULL;
+static lv_obj_t *s_form_container               = NULL;
+static lv_obj_t *s_identity_label               = NULL;
+static lv_obj_t *s_preview_data_label           = NULL;
+static lv_obj_t *s_preview_status_label         = NULL;
+
+/* ── shared config validation (UI + setmqtt console command) ─────────────── */
+
+bool ha_cfg_validate_device_name(const char *name)
+{
+    if (!name || name[0] == '\0' || strlen(name) > 31) {
+        return false;
+    }
+    for (const char *p = name; *p; p++) {
+        char c = *p;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ha_cfg_validate_topic_prefix(const char *prefix)
+{
+    if (!prefix || prefix[0] == '\0' || strlen(prefix) > 63) {
+        return false;
+    }
+    if (prefix[0] == '/' || prefix[strlen(prefix) - 1] == '/') {
+        return false;
+    }
+    for (const char *p = prefix; *p; p++) {
+        if (*p == '+' || *p == '#' || *p == ' ') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Default device identity: derived from the eFuse MAC at runtime
+ * ("indicator-<last two MAC bytes, hex>"), never forced back into NVS. */
+static void _derive_default_device_name(char *out, size_t out_size)
+{
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, out_size, "indicator-%02x%02x", mac[4], mac[5]);
+}
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -145,12 +199,49 @@ static void _style_textarea(lv_obj_t *ta)
     lv_obj_set_style_pad_left(ta, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
+/* Recompose the read-only topic preview from the current field text, falling
+ * back to the defaults for empty fields — the same rule the save path uses.
+ * Runs on the LVGL task (textarea event callbacks / view handler). */
+static void _refresh_topic_preview(void)
+{
+    if (!s_preview_data_label || !s_preview_status_label) {
+        return;
+    }
+
+    const char *prefix = s_broker_topic_prefix_textarea ?
+        lv_textarea_get_text(s_broker_topic_prefix_textarea) : "";
+    const char *name = s_broker_device_name_textarea ?
+        lv_textarea_get_text(s_broker_device_name_textarea) : "";
+
+    char default_name[32];
+    if (!prefix || prefix[0] == '\0') {
+        prefix = CONFIG_MQTT_TOPIC_PREFIX;
+    }
+    if (!name || name[0] == '\0') {
+        _derive_default_device_name(default_name, sizeof(default_name));
+        name = default_name;
+    }
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Data:   %s/%s/data", prefix, name);
+    lv_label_set_text(s_preview_data_label, buf);
+    snprintf(buf, sizeof(buf), "Status: %s/%s/status", prefix, name);
+    lv_label_set_text(s_preview_status_label, buf);
+}
+
+static void _on_identity_field_changed(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    _refresh_topic_preview();
+}
+
 static void _on_broker_confirm(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
-
     /* Close the keyboard and restore the full-height form before saving so
      * the result message box is not covered. */
     _set_keyboard_visible(false);
@@ -168,8 +259,10 @@ static void handle_mqtt_config_save(void)
         lv_textarea_get_text(s_broker_ip_textarea) : "";
     const char *new_port = s_broker_port_textarea ?
         lv_textarea_get_text(s_broker_port_textarea) : "";
-    const char *new_client_id = s_broker_client_id_textarea ?
-        lv_textarea_get_text(s_broker_client_id_textarea) : "";
+    const char *new_device_name = s_broker_device_name_textarea ?
+        lv_textarea_get_text(s_broker_device_name_textarea) : "";
+    const char *new_topic_prefix = s_broker_topic_prefix_textarea ?
+        lv_textarea_get_text(s_broker_topic_prefix_textarea) : "";
     const char *new_username = s_broker_username_textarea ?
         lv_textarea_get_text(s_broker_username_textarea) : "";
     const char *new_password = s_broker_password_textarea ?
@@ -196,6 +289,22 @@ static void handle_mqtt_config_save(void)
         return;
     }
 
+    /* Empty device name / topic prefix mean "restore the default"
+     * (MAC-derived name / "seeed") — ha_cfg_get() fills defaults for empty
+     * fields. Non-empty values must pass the shared validation. */
+    if (new_device_name[0] != '\0' && !ha_cfg_validate_device_name(new_device_name)) {
+        ESP_LOGE(TAG, "Invalid device name: %s", new_device_name);
+        show_message_box("Invalid device name ([A-Za-z0-9-_], max 31 chars)",
+                         lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+    if (new_topic_prefix[0] != '\0' && !ha_cfg_validate_topic_prefix(new_topic_prefix)) {
+        ESP_LOGE(TAG, "Invalid topic prefix: %s", new_topic_prefix);
+        show_message_box("Invalid topic prefix (no +/#/space, no leading/trailing /)",
+                         lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+
     ha_cfg_interface ha_cfg;
     ha_cfg_get(&ha_cfg);
 
@@ -209,12 +318,11 @@ static void handle_mqtt_config_save(void)
         return;
     }
 
-    if (strlcpy(ha_cfg.client_id, new_client_id, sizeof(ha_cfg.client_id))
-        >= sizeof(ha_cfg.client_id)) {
-        ESP_LOGE(TAG, "Client ID too long");
-        show_message_box("Client ID too long", lv_palette_main(LV_PALETTE_RED));
-        return;
-    }
+    /* Validated above (≤31 / ≤63 chars), so these always fit. */
+    strlcpy(ha_cfg.device_name, new_device_name, sizeof(ha_cfg.device_name));
+    strlcpy(ha_cfg.topic_prefix, new_topic_prefix, sizeof(ha_cfg.topic_prefix));
+    /* One name everywhere: the client id follows the device name. */
+    strlcpy(ha_cfg.client_id, new_device_name, sizeof(ha_cfg.client_id));
 
     if (strlcpy(ha_cfg.username, new_username, sizeof(ha_cfg.username))
         >= sizeof(ha_cfg.username)) {
@@ -236,8 +344,10 @@ static void handle_mqtt_config_save(void)
         return;
     }
 
-    ESP_LOGI(TAG, "MQTT config saved: broker=%s, client_id=%s, username=%s",
-             ha_cfg.broker_url, ha_cfg.client_id, ha_cfg.username);
+    ESP_LOGI(TAG, "MQTT config saved: broker=%s, device=%s, prefix=%s, username=%s",
+             ha_cfg.broker_url, ha_cfg.device_name, ha_cfg.topic_prefix, ha_cfg.username);
+
+    _refresh_topic_preview();
 
     /* Notify MQTT module to restart with new config */
     esp_event_post_to(ha_cfg_event_handle, HA_CFG_EVENT_BASE, HA_CFG_BROKER_CHANGED,
@@ -328,7 +438,16 @@ static void _ensure_broker_modal(void)
     #define ROW_INPUT_Y  22
     #define ROW_HEIGHT   70   /* label(20) + input(40) + gap(10) */
 
-    int y = 0;
+    /* Device identity line (Name / MAC / IP) for on-site matching against the
+     * broker — text is refreshed in update_config_fields(). */
+    s_identity_label = lv_label_create(s_form_container);
+    lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0x9E9E9E),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(s_identity_label, &lv_font_montserrat_14,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_pos(s_identity_label, 0, 0);
+
+    int y = 48;   /* below the two-line identity label */
 
     /* ── 1. Broker Address ──────────────────────────────────────────────── */
     lv_obj_t *addr_label = lv_label_create(s_form_container);
@@ -385,30 +504,62 @@ static void _ensure_broker_modal(void)
 
     y += ROW_HEIGHT;
 
-    /* ── 2. Client ID ───────────────────────────────────────────────────── */
-    lv_obj_t *cid_label = lv_label_create(s_form_container);
-    lv_label_set_text(cid_label, "Client ID");
-    lv_obj_set_style_text_color(cid_label, lv_color_hex(0x9E9E9E),
+    /* ── 2. Topic Prefix (row order mirrors <prefix>/<device_name>/<leaf>) ── */
+    lv_obj_t *prefix_label = lv_label_create(s_form_container);
+    lv_label_set_text(prefix_label, "Topic Prefix");
+    lv_obj_set_style_text_color(prefix_label, lv_color_hex(0x9E9E9E),
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(cid_label, &lv_font_montserrat_14,
+    lv_obj_set_style_text_font(prefix_label, &lv_font_montserrat_14,
                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_pos(cid_label, 0, y + ROW_LABEL_Y);
+    lv_obj_set_pos(prefix_label, 0, y + ROW_LABEL_Y);
 
-    s_broker_client_id_textarea = lv_textarea_create(s_form_container);
-    lv_obj_set_size(s_broker_client_id_textarea, 420, 40);
-    lv_obj_set_pos(s_broker_client_id_textarea, 0, y + ROW_INPUT_Y);
-    lv_textarea_set_max_length(s_broker_client_id_textarea, 31);
-    lv_textarea_set_placeholder_text(s_broker_client_id_textarea, "indicator-edge-01");
-    lv_textarea_set_one_line(s_broker_client_id_textarea, true);
-    _style_textarea(s_broker_client_id_textarea);
-    lv_obj_add_event_cb(s_broker_client_id_textarea, _on_textarea_focused,
+    s_broker_topic_prefix_textarea = lv_textarea_create(s_form_container);
+    lv_obj_set_size(s_broker_topic_prefix_textarea, 420, 40);
+    lv_obj_set_pos(s_broker_topic_prefix_textarea, 0, y + ROW_INPUT_Y);
+    lv_textarea_set_max_length(s_broker_topic_prefix_textarea, 63);
+    lv_textarea_set_placeholder_text(s_broker_topic_prefix_textarea,
+                                     CONFIG_MQTT_TOPIC_PREFIX);
+    lv_textarea_set_one_line(s_broker_topic_prefix_textarea, true);
+    _style_textarea(s_broker_topic_prefix_textarea);
+    lv_obj_add_event_cb(s_broker_topic_prefix_textarea, _on_textarea_focused,
                         LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_broker_client_id_textarea, _on_broker_keyboard_done,
+    lv_obj_add_event_cb(s_broker_topic_prefix_textarea, _on_broker_keyboard_done,
                         LV_EVENT_DEFOCUSED, NULL);
+    lv_obj_add_event_cb(s_broker_topic_prefix_textarea, _on_identity_field_changed,
+                        LV_EVENT_VALUE_CHANGED, NULL);
 
     y += ROW_HEIGHT;
 
-    /* ── 3. Username ────────────────────────────────────────────────────── */
+    /* ── 3. Device Name (one name everywhere: topic + MQTT client id) ────── */
+    lv_obj_t *name_label = lv_label_create(s_form_container);
+    lv_label_set_text(name_label, "Device Name");
+    lv_obj_set_style_text_color(name_label, lv_color_hex(0x9E9E9E),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(name_label, &lv_font_montserrat_14,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_pos(name_label, 0, y + ROW_LABEL_Y);
+
+    s_broker_device_name_textarea = lv_textarea_create(s_form_container);
+    lv_obj_set_size(s_broker_device_name_textarea, 420, 40);
+    lv_obj_set_pos(s_broker_device_name_textarea, 0, y + ROW_INPUT_Y);
+    lv_textarea_set_max_length(s_broker_device_name_textarea, 31);
+    /* Placeholder shows the MAC-derived default; saving an empty field
+     * restores that default. */
+    char default_name[32];
+    _derive_default_device_name(default_name, sizeof(default_name));
+    lv_textarea_set_placeholder_text(s_broker_device_name_textarea, default_name);
+    lv_textarea_set_one_line(s_broker_device_name_textarea, true);
+    _style_textarea(s_broker_device_name_textarea);
+    lv_obj_add_event_cb(s_broker_device_name_textarea, _on_textarea_focused,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_broker_device_name_textarea, _on_broker_keyboard_done,
+                        LV_EVENT_DEFOCUSED, NULL);
+    lv_obj_add_event_cb(s_broker_device_name_textarea, _on_identity_field_changed,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    y += ROW_HEIGHT;
+
+    /* ── 4. Username ────────────────────────────────────────────────────── */
     lv_obj_t *user_label = lv_label_create(s_form_container);
     lv_label_set_text(user_label, "Username");
     lv_obj_set_style_text_color(user_label, lv_color_hex(0x9E9E9E),
@@ -431,7 +582,7 @@ static void _ensure_broker_modal(void)
 
     y += ROW_HEIGHT;
 
-    /* ── 4. Password ────────────────────────────────────────────────────── */
+    /* ── 5. Password ────────────────────────────────────────────────────── */
     lv_obj_t *pass_label = lv_label_create(s_form_container);
     lv_label_set_text(pass_label, "Password");
     lv_obj_set_style_text_color(pass_label, lv_color_hex(0x9E9E9E),
@@ -453,9 +604,26 @@ static void _ensure_broker_modal(void)
     lv_obj_add_event_cb(s_broker_password_textarea, _on_broker_keyboard_done,
                         LV_EVENT_DEFOCUSED, NULL);
 
-    y += ROW_HEIGHT + 10;
+    y += ROW_HEIGHT;
 
-    /* ── 5. Confirm button ──────────────────────────────────────────────── */
+    /* ── 6. Live topic preview (read-only; updated on every keystroke) ────── */
+    s_preview_data_label = lv_label_create(s_form_container);
+    lv_obj_set_style_text_color(s_preview_data_label, lv_color_hex(0x9E9E9E),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(s_preview_data_label, &lv_font_montserrat_14,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_pos(s_preview_data_label, 0, y);
+
+    s_preview_status_label = lv_label_create(s_form_container);
+    lv_obj_set_style_text_color(s_preview_status_label, lv_color_hex(0x9E9E9E),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(s_preview_status_label, &lv_font_montserrat_14,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_pos(s_preview_status_label, 0, y + 20);
+
+    y += 50;
+
+    /* ── 7. Confirm button ──────────────────────────────────────────────── */
     lv_obj_t *confirm = lv_button_create(s_form_container);
     lv_obj_set_size(confirm, 420, 50);
     lv_obj_set_pos(confirm, 0, y);
@@ -491,6 +659,32 @@ static void _ensure_broker_modal(void)
 
 /* ── populate fields from stored config ──────────────────────────────────── */
 
+/* Identity line for on-site use: effective device name, eFuse MAC, STA IP. */
+static void _refresh_identity_label(const ha_cfg_interface *ha_cfg)
+{
+    if (!s_identity_label) {
+        return;
+    }
+
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    char ip_str[24] = "not connected";
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip_info = {0};
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK &&
+        ip_info.ip.addr != 0) {
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
+    }
+
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "Name: %s  MAC: %02x:%02x:%02x:%02x:%02x:%02x\nIP: %s",
+             ha_cfg->device_name,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ip_str);
+    lv_label_set_text(s_identity_label, buf);
+}
+
 static void update_config_fields(const ha_cfg_interface *ha_cfg)
 {
     _ensure_broker_modal();
@@ -515,8 +709,12 @@ static void update_config_fields(const ha_cfg_interface *ha_cfg)
         }
     }
 
-    if (s_broker_client_id_textarea) {
-        lv_textarea_set_text(s_broker_client_id_textarea, ha_cfg->client_id);
+    if (s_broker_device_name_textarea) {
+        lv_textarea_set_text(s_broker_device_name_textarea, ha_cfg->device_name);
+    }
+
+    if (s_broker_topic_prefix_textarea) {
+        lv_textarea_set_text(s_broker_topic_prefix_textarea, ha_cfg->topic_prefix);
     }
 
     if (s_broker_username_textarea) {
@@ -526,6 +724,9 @@ static void update_config_fields(const ha_cfg_interface *ha_cfg)
     if (s_broker_password_textarea) {
         lv_textarea_set_text(s_broker_password_textarea, ha_cfg->password);
     }
+
+    _refresh_identity_label(ha_cfg);
+    _refresh_topic_preview();
 }
 
 /* ── show modal ──────────────────────────────────────────────────────────── */
@@ -591,21 +792,45 @@ static void view_event_handler(void *handler_args, esp_event_base_t base,
 
 esp_err_t ha_cfg_get(ha_cfg_interface *ha_cfg)
 {
-    int len = sizeof(ha_cfg_interface);
     memset(ha_cfg, 0, sizeof(ha_cfg_interface));
+    size_t len = sizeof(ha_cfg_interface);
     esp_err_t err = indicator_nvs_read(MQTT_HA_CFG_STORAGE, ha_cfg, &len);
     if (err == ESP_OK && len == sizeof(ha_cfg_interface)) {
         ESP_LOGI(TAG, "mqtt broker cfg read successful");
     } else {
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGI(TAG, "mqtt broker cfg not find");
+        /* Legacy blobs (written before device_name/topic_prefix existed) are
+         * HA_CFG_LEGACY_SIZE bytes. Re-read at the legacy size: the first four
+         * fields share the same layout and the tail stays zeroed, so the new
+         * fields fall through to the defaults below and the stored broker
+         * config survives the firmware upgrade. */
+        size_t legacy_len = HA_CFG_LEGACY_SIZE;
+        esp_err_t legacy_err = indicator_nvs_read(MQTT_HA_CFG_STORAGE, ha_cfg, &legacy_len);
+        if (legacy_err == ESP_OK && legacy_len == HA_CFG_LEGACY_SIZE) {
+            ESP_LOGI(TAG, "mqtt broker cfg uses legacy layout — new fields defaulted");
+            err = ESP_OK;
         } else {
-            ESP_LOGI(TAG, "mqtt broker cfg read err:%d", err);
+            if (err == ESP_ERR_NVS_NOT_FOUND) {
+                ESP_LOGI(TAG, "mqtt broker cfg not find");
+            } else {
+                ESP_LOGI(TAG, "mqtt broker cfg read err:%d", err);
+            }
+            strlcpy(ha_cfg->broker_url, CONFIG_BROKER_URL, sizeof(ha_cfg->broker_url));
+            strlcpy(ha_cfg->username, CONFIG_MQTT_USERNAME, sizeof(ha_cfg->username));
+            strlcpy(ha_cfg->password, CONFIG_MQTT_PASSWORD, sizeof(ha_cfg->password));
         }
-        strlcpy(ha_cfg->broker_url, CONFIG_BROKER_URL, sizeof(ha_cfg->broker_url));
-        strlcpy(ha_cfg->client_id, CONFIG_MQTT_CLIENT_ID, sizeof(ha_cfg->client_id));
-        strlcpy(ha_cfg->username, CONFIG_MQTT_USERNAME, sizeof(ha_cfg->username));
-        strlcpy(ha_cfg->password, CONFIG_MQTT_PASSWORD, sizeof(ha_cfg->password));
+    }
+
+    /* Fill-in defaults, shared by fresh and legacy configs. */
+    if (ha_cfg->topic_prefix[0] == '\0') {
+        strlcpy(ha_cfg->topic_prefix, CONFIG_MQTT_TOPIC_PREFIX, sizeof(ha_cfg->topic_prefix));
+    }
+    if (ha_cfg->device_name[0] == '\0') {
+        _derive_default_device_name(ha_cfg->device_name, sizeof(ha_cfg->device_name));
+    }
+    /* One name everywhere: the client id follows the device name unless it
+     * was explicitly overridden (setmqtt -c). */
+    if (ha_cfg->client_id[0] == '\0') {
+        strlcpy(ha_cfg->client_id, ha_cfg->device_name, sizeof(ha_cfg->client_id));
     }
     return err;
 }

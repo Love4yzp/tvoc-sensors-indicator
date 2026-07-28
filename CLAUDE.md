@@ -38,7 +38,7 @@ python3 scripts/dev_check.py --skip-build     # all checks except firmware build
 python3 scripts/dev_check.py                  # full check including build
 
 # Protocol-specific tests
-python3 scripts/test_sen5x_mqtt_protocol.py   # SEN54/Sparkplug B payloads
+python3 scripts/test_sen5x_mqtt_protocol.py   # SEN54 MQTT topics/payloads
 python3 scripts/test_ha_switch_protocol.py    # legacy HA switch protocol
 ```
 
@@ -110,20 +110,22 @@ esp_event_handler_instance_register_with(
 
 Event IDs and payload types are defined in `main/view_data.h` (IDs) and `main/view_data_types.h` (structs). The manifest comment in `view_data_types.h` lists every event's producer and consumer — update it when adding events.
 
-### MQTT protocol (Sparkplug B)
+### MQTT protocol (configurable topics + LWT status)
 
-The device publishes to a broker at `mqtt://seeed-mqtt.lan` (configurable via Settings UI or `setmqtt` console command). Topics follow Sparkplug B:
+The device publishes to a broker at `mqtt://seeed-mqtt.lan` (configurable via Settings UI or `setmqtt` console command). Topics follow `<topic_prefix>/<device_name>/<leaf>` with two fixed leaves:
 
 ```
-spBv1.0/seeed/NBIRTH/edge-01          — node birth
-spBv1.0/seeed/NDEATH/edge-01          — node death (LWT)
-spBv1.0/seeed/DBIRTH/edge-01/sen5x   — device birth (with per-metric "type")
-spBv1.0/seeed/DDATA/edge-01/sen5x    — data (no "type" field, every 5 s)
+seeed/indicator-3f2a/data     — sensor data (JSON, every 5 s, NTP-gated)
+seeed/indicator-3f2a/status   — retained "online" on connect; broker LWT publishes retained "offline"
 ```
 
-DDATA carries 8 metrics: `sen5x/pm1_0`, `sen5x/pm2_5`, `sen5x/pm4_0`, `sen5x/pm10`, `sen5x/humidity`, `sen5x/temperature`, `sen5x/voc_index`, `sen5x/voc_alert`. PM/humidity/temperature are `"type":"float"`; `voc_index` and `voc_alert` are `"type":"int"`. Float values are rounded to sensor resolution (PM 1 dp, humidity/temperature 2 dp) so float32→double noise never reaches the wire. `seq` wraps 0–255. Timestamps are UTC epoch **seconds** (`time(NULL)` via `_timestamp_s()` in `sen5x_mqtt.c` — note this is off the Sparkplug B convention of epoch ms, chosen so downstream consumers parse seconds directly); the whole NBIRTH/DBIRTH/DDATA sequence is held back until the clock is NTP-synced so nothing carries a boot-relative timestamp (if MQTT connects before the clock syncs, birth is deferred and sent by the DDATA timer once time is valid).
+The prefix (default `seeed`) and device name (default MAC-derived `indicator-<mac4>`, e.g. `indicator-3f2a`) are NVS-configurable via the Settings UI or `setmqtt -n`/`-t`. The device name is also the MQTT client_id — one name everywhere (`setmqtt -c` remains as an advanced client-id override).
 
-Implementation lives in `main/sen5x/sen5x_mqtt.c`. It is wired into `main/ha/ha_mqtt.c` (`indicator_ha_model_init` calls `sen5x_mqtt_init`).
+The data payload carries `seq` (wraps 0–255), `timestamp` (UTC epoch **seconds** via `_timestamp_s()` in `sen5x_mqtt.c`), a `device` field echoing the device name, and 8 metrics: `sen5x/pm1_0`, `sen5x/pm2_5`, `sen5x/pm4_0`, `sen5x/pm10`, `sen5x/humidity`, `sen5x/temperature`, `sen5x/voc_index`, `sen5x/voc_alert`. Float values are rounded to sensor resolution (PM 1 dp, humidity/temperature 2 dp) so float32→double noise never reaches the wire. Data publishes are held back until the clock is NTP-synced so nothing carries a boot-relative timestamp; the retained `online` status on connect is not NTP-gated.
+
+The earlier Sparkplug B envelope (`spBv1.0/...` NBIRTH/DBIRTH/DDATA topics, per-metric `"type"` fields) was removed — do not reintroduce it. Full protocol spec: `docs/mqtt-protocol-and-voc-indicator.md`.
+
+Implementation lives in `main/sen5x/sen5x_mqtt.c` (publish logic) and `main/ha/ha_mqtt.c` (client lifecycle, LWT, `mqtt_topics_build()`). It is wired into `indicator_ha_model_init` (`sen5x_mqtt_init`).
 
 ### VOC alert and warming-up state
 
@@ -180,7 +182,7 @@ give tiles non-`LV_DIR_NONE` directions in `nav.c`, add the directory to
 | Sensor enum and SENSOR_TYPE_LIST | `main/view_data_types.h` |
 | Sensor data cache/parser | `main/sensor/sensor_model.c` |
 | Sensor dashboard UI | `main/sensor/sensor_view.c` |
-| Sparkplug B MQTT logic | `main/sen5x/sen5x_mqtt.c` + `.h` |
+| MQTT publish logic (topics, payload, status) | `main/sen5x/sen5x_mqtt.c` + `.h` |
 | MQTT lifecycle (ESP32-S3) | `main/ha/ha_mqtt.c` |
 | MQTT broker + credentials | `main/home_assistant_config.h` |
 | Home Assistant model/view | `main/ha/` |

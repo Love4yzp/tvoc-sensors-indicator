@@ -20,9 +20,14 @@ extern "C" {
 /* Default MQTT broker per Seeed protocol spec (seeed-mqtt.lan must resolve via LAN DNS).
  * Override at runtime via the Settings UI → MQTT Broker IP. */
 #define CONFIG_BROKER_URL      "mqtt://seeed-mqtt.lan"
+/* Client ID now defaults to the device name (one name everywhere) — this macro
+ * is kept for reference but is no longer used as a fallback. */
 #define CONFIG_MQTT_CLIENT_ID  "indicator-edge-01"
 #define CONFIG_MQTT_USERNAME   "sensor-node"
 #define CONFIG_MQTT_PASSWORD   "123"
+
+/* Default MQTT topic prefix: topics are "<prefix>/<device_name>/{data,status}". */
+#define CONFIG_MQTT_TOPIC_PREFIX "seeed"
 
 #define CONFIG_HA_SENSOR_ENTITY_NUM              6
 #define CONFIG_HA_SWITCH_ENTITY_NUM              8
