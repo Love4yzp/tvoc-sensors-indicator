@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> File roles (pinned): `CLAUDE.md` is read by Claude Code; `AGENTS.md` is read by other agents (Codex, Cursor, Kimi Code, etc.). Both are intentional entry points — do not merge, delete, or deduplicate them.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Build Commands
@@ -203,7 +205,8 @@ Do not define these macros in normal builds. To re-enable legacy hardware, add `
 
 Do not remove from `sdkconfig.defaults`:
 
-- `CONFIG_LV_MEM_CUSTOM=y` — required; removing causes LVGL to freeze
+- `CONFIG_LV_MEM_CUSTOM=y` — legacy no-op under LVGL 9.5 (the option no longer exists and is silently dropped); LVGL actually uses its builtin TLSF allocator with a 64 KB pool in internal RAM (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`). Kept for historical reasons.
+- LVGL memory is extended at runtime by `main/ui/ui_mem_pool.c`, which adds a 256 KB PSRAM overflow pool via `lv_mem_add_pool()`. This is load-bearing: offscreen render layers (clip_corner strips, msgbox corners) are allocated from LVGL's pool, and an allocation that can never succeed makes LVGL retry forever and freezes the UI. Do not remove it. `CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=256` must stay set — LVGL's TLSF caps any pool at `LV_MEM_SIZE + LV_MEM_POOL_EXPAND_SIZE`, so without it `lv_mem_add_pool` rejects the 256 KB pool.
 - PSRAM: 120 MHz OCT mode
 - CPU: 240 MHz, flash: QIO 120 MHz
 
