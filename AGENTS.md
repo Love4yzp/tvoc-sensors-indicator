@@ -177,7 +177,7 @@ There is no on-device unit test framework. Verification is layered:
 ## Deployment
 
 - Normal flow: `./dev build && ./dev flash` (plus `./dev rp2040 build/upload` when `rp2040/` changed).
-- `click_deploy/` is a packaging scaffold for a no-toolchain flashing bundle (ESP32-S3 + RP2040 images for macOS/Linux/Windows). Firmware images are not committed; maintainers populate it with `./click_deploy/sync_from_build.sh` after building. `scripts/test_click_deploy_package.py` guards the package layout.
+- `click_deploy/` is a packaging scaffold for a no-toolchain flashing bundle (ESP32-S3 + RP2040 images for macOS/Linux/Windows). Firmware images and bundled tool binaries are not committed (gitignored). One-command release packaging: `scripts/package_windows_deploy.sh [--build]` — it syncs the firmware via `click_deploy/sync_from_build.sh`, downloads the pinned Windows `esptool.exe` into `click_deploy/tools/`, writes `click_deploy.zip`, then cleans the populated artifacts (`--keep` retains them). The Windows RP2040 script flashes by copying `firmware.uf2` onto the chip's `RPI-RP2` BOOTSEL drive (built-in USB mass-storage driver — do **not** reintroduce picotool on Windows, it needs a Zadig/WinUSB driver there); macOS/Linux still use picotool from PATH. `scripts/test_click_deploy_package.py` guards the package layout and expects the checkout to stay scaffold-only.
 
 ## Security considerations
 

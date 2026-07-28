@@ -1,30 +1,24 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$Elf = Join-Path $Root "firmware\rp2040\firmware.elf"
-$BundledPicotool = Join-Path $Root "tools\picotool\windows-amd64\picotool.exe"
+$Uf2 = Join-Path $Root "firmware\rp2040\firmware.uf2"
 $Port = if ($args.Count -gt 0) { $args[0] } elseif ($env:RP2040_PORT) { $env:RP2040_PORT } else { "" }
 
-if (!(Test-Path $Elf)) {
-    throw "Missing RP2040 firmware: $Elf"
+if (!(Test-Path $Uf2)) {
+    throw "Missing RP2040 firmware: $Uf2"
 }
 
-if (Test-Path $BundledPicotool) {
-    $Picotool = $BundledPicotool
-} else {
-    $cmd = Get-Command picotool -ErrorAction SilentlyContinue
-    if (!$cmd) {
-        throw "No bundled picotool and no picotool on PATH."
+# In BOOTSEL mode the RP2040 shows up as a USB mass-storage drive named
+# RPI-RP2. Copying the .uf2 onto it flashes the chip — no extra driver or
+# picotool needed on Windows.
+function Get-Rp2Drive {
+    $vol = Get-Volume |
+        Where-Object { $_.FileSystemLabel -eq "RPI-RP2" -and $_.DriveLetter } |
+        Select-Object -First 1
+    if ($vol) {
+        return "$($vol.DriveLetter):\"
     }
-    $Picotool = $cmd.Source
-}
-
-function Get-PicotoolDeviceCount {
-    $output = & $Picotool info -d 2>&1
-    if ($LASTEXITCODE -ne 0 -and $output -notmatch "No accessible") {
-        Write-Host $output
-    }
-    return ([regex]::Matches(($output -join "`n"), "(?m)^\s*type:")).Count
+    return ""
 }
 
 function Find-Rp2040Port {
@@ -53,38 +47,35 @@ function Touch-Serial1200 {
     }
 }
 
-if (!$Port) {
-    $Port = Find-Rp2040Port
-}
+$Drive = Get-Rp2Drive
 
-$BeforeCount = Get-PicotoolDeviceCount
-
-if ($BeforeCount -gt 0) {
-    Write-Host "RP2040 BOOTSEL device is already visible to picotool."
+if ($Drive) {
+    Write-Host "RP2040 BOOTSEL drive is already present at $Drive"
 } else {
     if (!$Port) {
-        throw "RP2040 serial port was not auto-detected and no BOOTSEL device is visible. Set `$env:RP2040_PORT='COMx' and retry."
+        $Port = Find-Rp2040Port
+    }
+    if (!$Port) {
+        throw "RP2040 serial port was not auto-detected. Set `$env:RP2040_PORT='COMx' and retry."
     }
 
     Write-Host "Triggering RP2040 BOOTSEL through $Port"
     Touch-Serial1200 $Port
 
-    Write-Host "Waiting for RP2040 BOOTSEL device..."
-    for ($i = 0; $i -lt 30; $i++) {
-        $NowCount = Get-PicotoolDeviceCount
-        if ($NowCount -gt $BeforeCount -or $NowCount -gt 0) {
+    Write-Host "Waiting for the RPI-RP2 drive to appear..."
+    for ($i = 0; $i -lt 50; $i++) {
+        Start-Sleep -Milliseconds 300
+        $Drive = Get-Rp2Drive
+        if ($Drive) {
             break
         }
-        Start-Sleep -Milliseconds 200
     }
 
-    if ((Get-PicotoolDeviceCount) -eq 0) {
-        throw "RP2040 BOOTSEL device was not found by picotool."
+    if (!$Drive) {
+        throw "The RPI-RP2 drive did not appear. Unplug and replug the USB cable, then retry."
     }
 }
 
-Write-Host "Flashing RP2040 with picotool"
-& $Picotool load -v -x $Elf
-if ($LASTEXITCODE -ne 0) {
-    throw "picotool failed with exit code $LASTEXITCODE"
-}
+Write-Host "Flashing RP2040: copying firmware.uf2 to $Drive"
+Copy-Item $Uf2 $Drive
+Write-Host "RP2040 flashed. The RPI-RP2 drive disappears as the chip reboots."

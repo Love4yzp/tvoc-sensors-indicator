@@ -115,3 +115,13 @@ docs/
 
 # Flasher upload credentials (sourced by scripts/upload_to_flasher.sh)
 .flasher.env
+
+# click_deploy: populated firmware images and bundled flashing tools are
+# release artifacts (see click_deploy/README.md) — never commit them.
+click_deploy/firmware/esp32s3/*
+!click_deploy/firmware/esp32s3/.gitkeep
+click_deploy/firmware/rp2040/*
+!click_deploy/firmware/rp2040/.gitkeep
+click_deploy/tools/*
+!click_deploy/tools/.gitkeep
+click_deploy.zip
