@@ -30,6 +30,14 @@ static void _rebuild_list(wifi_list_screen_t *s) {
     lv_obj_set_style_bg_color(s->list, lv_color_hex(0x101418), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_grad_color(s->list, lv_color_hex(0x101418), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(s->list, lv_color_hex(0x101418), LV_PART_MAIN | LV_STATE_DEFAULT);
+    /* The default theme sets clip_corner on lv_list backgrounds. With it on,
+     * LVGL renders the top/bottom rounded strips (420 x ~7 px, ARGB8888,
+     * ~12 KB each) through offscreen layers on EVERY scroll frame — and a
+     * layer allocation that fails in the small builtin pool is retried
+     * forever, freezing the whole UI. The list background is the same color
+     * as the modal behind it, so the rounded corners are invisible and
+     * clipping children to them buys nothing. */
+    lv_obj_set_style_clip_corner(s->list, false, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
 static void _add_item(wifi_list_screen_t *s, const char *ssid,

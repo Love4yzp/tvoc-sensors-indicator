@@ -39,6 +39,14 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
 CONFIG_FREERTOS_HZ=1000
 # CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 
+# Reboot instead of freezing forever when a task (e.g. taskLVGL) stops
+# resetting the watchdog — a hung UI must recover on its own in the field.
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# Dump all task stacks to the UART on panic (blocked-task backtraces, e.g. a
+# frozen taskLVGL, are not visible any other way). Decode with espcoredump.py.
+CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y
+
 
 CONFIG_LCD_AVOID_TEAR=y
 CONFIG_LCD_LVGL_FULL_REFRESH=y
@@ -48,6 +56,9 @@ CONFIG_LV_DEF_REFR_PERIOD=10
 
 # CONFIG_LV_CONF_MINIMAL=y
 CONFIG_LV_MEM_CUSTOM=y
+# Raise LVGL TLSF max pool size (default = LV_MEM_SIZE) so the 256 KB PSRAM
+# overflow pool added in main/ui/ui_mem_pool.c is accepted by lv_mem_add_pool.
+CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=256
 # CONFIG_LV_MEMCPY_MEMSET_STD=y
 # CONFIG_LV_USE_ASSERT_NULL=y
 # CONFIG_LV_USE_ASSERT_MALLOC=y

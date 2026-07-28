@@ -19,6 +19,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lv_port.h"
+#include "ui_freeze_mon.h"
+#include "ui_mem_pool.h"
 
 #define VERSION		 "v1.1.0"
 #define LOG_MEM_INFO 1
@@ -51,6 +53,8 @@ void app_main(void) {
 
 	ESP_ERROR_CHECK(bsp_board_init());
 	lv_port_init();
+	ui_mem_pool_init();
+	ui_freeze_mon_start();
 
 	esp_event_loop_args_t view_event_task_args = {
 		/* Headroom for the Wi-Fi connect bring-up burst (WIFI_ST/GOT_IP/MQTT/
