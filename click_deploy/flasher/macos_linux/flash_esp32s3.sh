@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 BAUD="${ESP_BAUD:-460800}"
 PORT="${1:-${ESPPORT:-}}"
 
+# In a packaged bundle, firmware and tools sit next to the script.
+# In the repo scaffold, they live two levels up in click_deploy/.
+resolve_bundle_or_repo() {
+  local name="$1"
+  if [ -e "$SCRIPT_DIR/$name" ]; then
+    echo "$SCRIPT_DIR/$name"
+  else
+    echo "$SCRIPT_DIR/../../$name"
+  fi
+}
+
+FW_ROOT="$(resolve_bundle_or_repo firmware)"
+TOOLS_ROOT="$(resolve_bundle_or_repo tools)"
+
 find_bundled_esptool() {
   case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64)   echo "$ROOT_DIR/tools/esptool/macos-arm64/esptool" ;;
-    Darwin-x86_64)  echo "$ROOT_DIR/tools/esptool/macos-amd64/esptool" ;;
-    Linux-x86_64)   echo "$ROOT_DIR/tools/esptool/linux-amd64/esptool" ;;
-    Linux-aarch64)  echo "$ROOT_DIR/tools/esptool/linux-aarch64/esptool" ;;
+    Darwin-arm64)   echo "$TOOLS_ROOT/esptool/macos-arm64/esptool" ;;
+    Darwin-x86_64)  echo "$TOOLS_ROOT/esptool/macos-amd64/esptool" ;;
+    Linux-x86_64)   echo "$TOOLS_ROOT/esptool/linux-amd64/esptool" ;;
+    Linux-aarch64|Linux-arm64) echo "$TOOLS_ROOT/esptool/linux-aarch64/esptool" ;;
     *)              echo "" ;;
   esac
 }
@@ -28,7 +42,7 @@ if [ -z "$ESPTOOL" ] || [ ! -x "$ESPTOOL" ]; then
   fi
 fi
 
-FW="$ROOT_DIR/firmware/esp32s3"
+FW="$FW_ROOT/esp32s3"
 for file in bootloader.bin partition-table.bin indicator_ha.bin; do
   if [ ! -f "$FW/$file" ]; then
     echo "Missing ESP32-S3 firmware file: $FW/$file" >&2

@@ -1,89 +1,111 @@
 # SenseCAP Indicator Click Deploy
 
-This folder is a packaging scaffold for a firmware bundle that can flash both
-chips in the SenseCAP Indicator:
+This folder packages the SenseCAP Indicator firmware into self-contained,
+per-platform flasher bundles:
 
-- ESP32-S3 screen-side firmware
-- RP2040 sensor coprocessor firmware
+- `firmware/` — latest built firmware images (single source of truth).
+- `tools/` — downloaded flashing tools per platform/architecture.
+- `flasher/` — platform-specific bundles for end users.
+  - `macos_linux/` — shell scripts for macOS and Linux.
+  - `windows/` — PowerShell scripts for Windows.
+  - `package.sh` — interactive maintainer script that builds, syncs, and zips.
 
-The repository does not commit generated firmware images or flashing tool
+The repository does **not** commit generated firmware images or flashing tool
 binaries. Build outputs are copied into this folder when preparing a release
 package.
 
 ## Maintainer workflow
 
-One command from the repository root produces `click_deploy.zip` (firmware +
-bundled Windows tools + flash scripts):
+Run the interactive packaging script from the repository root:
 
 ```sh
-scripts/package_windows_deploy.sh           # package existing build outputs
-scripts/package_windows_deploy.sh --build   # rebuild firmware first, then package
+./click_deploy/flasher/package.sh
 ```
 
-The script syncs the firmware, downloads the pinned Windows esptool binary,
-writes the zip, and then cleans the populated artifacts out of this folder
-again (`--keep` skips the cleanup; the package-layout guard
-`scripts/test_click_deploy_package.py` expects a scaffold-only checkout).
+It will ask for:
 
-The equivalent manual steps are:
+1. Platform: `macos_linux` or `windows`
+2. Chips: `esp32s3`, `rp2040`, or `both`
+
+Then it:
+
+- Checks whether the requested firmware is up to date against the source tree.
+- Rebuilds via `./dev build` or `./dev rp2040 build` if stale.
+- Syncs the artifacts into `click_deploy/firmware/`.
+- Downloads the pinned `esptool` release if the tool is missing.
+- Assembles a self-contained bundle under `flasher/<platform>/`.
+- Writes `click_deploy/flasher/indicator_ha-<platform>-<chips>.zip`.
+- Cleans the populated `firmware/` and `tools/` directories out of the bundle
+  scaffold afterward.
+
+For CI or non-interactive use, set the two variables before running:
+
+```sh
+PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
+```
+
+To force a rebuild even when the script thinks the firmware is fresh:
+
+```sh
+FORCE_BUILD=1 PLATFORM=macos_linux CHIPS=both ./click_deploy/flasher/package.sh
+```
+
+### Manual build + sync (without packaging)
+
+If you only want to update `click_deploy/firmware/` without producing a zip:
 
 ```sh
 ./dev build
 ./dev rp2040 build
-./click_deploy/sync_from_build.sh
 ```
 
-Then zip the `click_deploy/` folder. A complete zip should contain:
+Then run the packaging script and stop after the sync step, or copy the files
+from `build/` and `rp2040/.pio/build/indicator_rp2040/` manually.
+
+## Layout of a complete package
 
 ```text
 click_deploy/
   firmware/
-    esp32s3/
-      bootloader.bin
-      partition-table.bin
-      indicator_ha.bin
-      flasher_args.json
-    rp2040/
-      firmware.elf
-      firmware.uf2
+    esp32s3/      bootloader.bin, partition-table.bin, indicator_ha.bin, flasher_args.json
+    rp2040/       firmware.elf, firmware.uf2
   tools/
-    esptool/
-      windows-amd64/esptool.exe
-  macos_linux/
-  windows/
+    esptool/      per-platform binaries
+    picotool/     macOS/Linux only, optional (falls back to PATH)
+  flasher/
+    package.sh
+    macos_linux/
+      flash_all.sh
+      flash_esp32s3.sh
+      flash_rp2040.sh
+      install.sh
+      firmware/...
+      tools/...
+    windows/
+      flash_all.ps1
+      flash_esp32s3.ps1
+      flash_rp2040.ps1
+      firmware/...
+      tools/...
 ```
 
-The ESP32-S3 flash scripts prefer the bundled `tools/esptool/` binary and fall
-back to `esptool` / `esptool.py` on PATH. The RP2040 needs no flashing tool:
-in BOOTSEL mode it appears as a USB drive named `RPI-RP2`, and copying
-`firmware.uf2` onto it flashes the chip (the macOS/Linux scripts still use
-`picotool` from PATH).
+## End-user flashing
 
-### Bundled Windows tools
+### macOS / Linux
 
-For a fully self-contained Windows package, download the official prebuilt
-binary and place it here (the path is what the PowerShell script looks for):
-
-```text
-tools/esptool/windows-amd64/esptool.exe     # from https://github.com/espressif/esptool/releases
-                                            # (esptool-vX.Y.Z-windows-amd64.zip, tested with v5.3.1)
-```
-
-picotool is intentionally **not** bundled for Windows: picotool there needs a
-Zadig/WinUSB driver to talk to the BOOTSEL device, while the UF2-drive method
-works with the built-in Windows mass-storage driver.
-
-Note: esptool v5 prints deprecation warnings for the underscore-style
-arguments (`write_flash`, `--flash_mode`, ...) used by the flash scripts; they
-still work, and the same arguments also run on the older esptool v4 that ships
-with ESP-IDF.
-
-## macOS / Linux
+Unzip the bundle and run:
 
 ```sh
-cd click_deploy
+cd indicator_ha-macos_linux-both
 ./macos_linux/install.sh
 ./macos_linux/flash_all.sh
+```
+
+To flash only one chip:
+
+```sh
+./macos_linux/flash_esp32s3.sh
+./macos_linux/flash_rp2040.sh
 ```
 
 To pin serial ports:
@@ -93,15 +115,16 @@ ESPPORT=/dev/cu.usbmodemXXXX ./macos_linux/flash_esp32s3.sh
 RP2040_PORT=/dev/cu.usbmodemYYYY ./macos_linux/flash_rp2040.sh
 ```
 
-## Windows PowerShell
+### Windows PowerShell
+
+Unzip the bundle and run:
 
 ```powershell
-cd click_deploy
+cd indicator_ha-windows-both
 .\windows\flash_all.ps1
 ```
 
-If Windows blocks the scripts with an execution-policy error, run them once
-with:
+If Windows blocks the scripts with an execution-policy error, run once with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\windows\flash_all.ps1
@@ -114,3 +137,15 @@ $env:ESPPORT = "COM7"
 $env:RP2040_PORT = "COM8"
 .\windows\flash_all.ps1
 ```
+
+## Tooling notes
+
+- The ESP32-S3 scripts prefer the bundled `esptool` binary for the running
+  platform and fall back to `esptool` / `esptool.py` on PATH.
+- The RP2040 is flashed differently per platform:
+  - **macOS / Linux:** `picotool` (bundled if present, otherwise from PATH).
+  - **Windows:** copy `firmware.uf2` onto the `RPI-RP2` BOOTSEL USB drive. No
+    extra driver or `picotool` is needed.
+- `esptool` v5 prints deprecation warnings for the underscore-style arguments
+  (`write_flash`, `--flash_mode`, ...) used by the scripts; they still work, and
+  the same arguments also run on the older `esptool` v4 shipped with ESP-IDF.

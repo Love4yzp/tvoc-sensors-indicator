@@ -124,4 +124,7 @@ click_deploy/firmware/rp2040/*
 !click_deploy/firmware/rp2040/.gitkeep
 click_deploy/tools/*
 !click_deploy/tools/.gitkeep
+click_deploy/flasher/*/firmware/*
+click_deploy/flasher/*/tools/*
+click_deploy/flasher/*.zip
 click_deploy.zip

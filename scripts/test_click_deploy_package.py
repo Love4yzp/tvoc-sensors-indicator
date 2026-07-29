@@ -15,17 +15,17 @@ class ClickDeployPackageTests(unittest.TestCase):
     def test_scaffold_contains_cross_platform_entrypoints(self) -> None:
         expected = [
             "README.md",
-            "sync_from_build.sh",
             "firmware/esp32s3/.gitkeep",
             "firmware/rp2040/.gitkeep",
             "tools/.gitkeep",
-            "macos_linux/install.sh",
-            "macos_linux/flash_all.sh",
-            "macos_linux/flash_esp32s3.sh",
-            "macos_linux/flash_rp2040.sh",
-            "windows/flash_all.ps1",
-            "windows/flash_esp32s3.ps1",
-            "windows/flash_rp2040.ps1",
+            "flasher/package.sh",
+            "flasher/macos_linux/install.sh",
+            "flasher/macos_linux/flash_all.sh",
+            "flasher/macos_linux/flash_esp32s3.sh",
+            "flasher/macos_linux/flash_rp2040.sh",
+            "flasher/windows/flash_all.ps1",
+            "flasher/windows/flash_esp32s3.ps1",
+            "flasher/windows/flash_rp2040.ps1",
         ]
         missing = [path for path in expected if not (DEPLOY / path).exists()]
 
@@ -48,15 +48,15 @@ class ClickDeployPackageTests(unittest.TestCase):
 
         self.assertEqual([], offenders)
 
-    def test_sync_script_collects_current_build_outputs(self) -> None:
-        text = (DEPLOY / "sync_from_build.sh").read_text()
+    def test_package_script_knows_build_outputs(self) -> None:
+        text = (DEPLOY / "flasher/package.sh").read_text()
 
         self.assertIn("build/bootloader/bootloader.bin", text)
         self.assertIn("build/partition_table/partition-table.bin", text)
         self.assertIn("build/indicator_ha.bin", text)
+        self.assertIn("build/flasher_args.json", text)
         self.assertIn("rp2040/.pio/build/indicator_rp2040/firmware.uf2", text)
         self.assertIn("rp2040/.pio/build/indicator_rp2040/firmware.elf", text)
-        self.assertIn("click_deploy firmware is up to date", text)
 
 
 if __name__ == "__main__":

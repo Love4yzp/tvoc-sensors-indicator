@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
-ELF="$ROOT_DIR/firmware/rp2040/firmware.elf"
 PORT="${1:-${RP2040_PORT:-}}"
+
+# In a packaged bundle, firmware and tools sit next to the script.
+# In the repo scaffold, they live two levels up in click_deploy/.
+resolve_bundle_or_repo() {
+  local name="$1"
+  if [ -e "$SCRIPT_DIR/$name" ]; then
+    echo "$SCRIPT_DIR/$name"
+  else
+    echo "$SCRIPT_DIR/../../$name"
+  fi
+}
+
+FW_ROOT="$(resolve_bundle_or_repo firmware)"
+TOOLS_ROOT="$(resolve_bundle_or_repo tools)"
+ELF="$FW_ROOT/rp2040/firmware.elf"
 
 if [ ! -f "$ELF" ]; then
   echo "Missing RP2040 firmware: $ELF" >&2
@@ -23,8 +37,8 @@ platform_dir() {
 
 PICOTOOL=""
 PLATFORM_DIR="$(platform_dir)"
-if [ -n "$PLATFORM_DIR" ] && [ -x "$ROOT_DIR/tools/picotool/$PLATFORM_DIR/picotool" ]; then
-  PICOTOOL="$ROOT_DIR/tools/picotool/$PLATFORM_DIR/picotool"
+if [ -n "$PLATFORM_DIR" ] && [ -x "$TOOLS_ROOT/picotool/$PLATFORM_DIR/picotool" ]; then
+  PICOTOOL="$TOOLS_ROOT/picotool/$PLATFORM_DIR/picotool"
 elif command -v picotool >/dev/null 2>&1; then
   PICOTOOL="$(command -v picotool)"
 else
