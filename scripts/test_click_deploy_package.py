@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -32,6 +33,8 @@ class ClickDeployPackageTests(unittest.TestCase):
         self.assertEqual([], missing)
 
     def test_scaffold_does_not_commit_firmware_or_tool_binaries(self) -> None:
+        """Firmware and tool binaries may be populated locally, but they must
+        never be committed."""
         forbidden_suffixes = {
             ".bin",
             ".elf",
@@ -40,10 +43,12 @@ class ClickDeployPackageTests(unittest.TestCase):
             ".dll",
             ".dylib",
         }
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "click_deploy/"], cwd=ROOT, text=True
+        ).splitlines()
         offenders = [
-            str(path.relative_to(ROOT))
-            for path in DEPLOY.rglob("*")
-            if path.is_file() and path.suffix.lower() in forbidden_suffixes
+            path for path in tracked
+            if Path(path).suffix.lower() in forbidden_suffixes
         ]
 
         self.assertEqual([], offenders)

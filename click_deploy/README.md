@@ -50,6 +50,14 @@ To force a rebuild even when the script thinks the firmware is fresh:
 FORCE_BUILD=1 PLATFORM=macos_linux CHIPS=both ./click_deploy/flasher/package.sh
 ```
 
+To use a different `esptool` download source (the default tries a domestic
+GitHub mirror first, then falls back to the official GitHub URL):
+
+```sh
+ESPTOOL_BASE_URL=https://github.com/espressif/esptool/releases/download \
+  PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
+```
+
 ### Manual build + sync (without packaging)
 
 If you only want to update `click_deploy/firmware/` without producing a zip:

@@ -8,11 +8,9 @@ coprocessor). The shipped artifacts are per-platform zips under
 ## Golden rules
 
 - **Never commit firmware images or tool binaries** (`.bin`, `.uf2`, `.elf`,
-  `.exe`). They are gitignored; the checkout must stay scaffold-only.
-  `scripts/test_click_deploy_package.py` enforces this and fails as soon as
-  populated artifacts exist in this folder — so either clean after packaging
-  (the packaging script's default) or accept the guard failing locally while
-  the folder is populated.
+  `.exe`). They are gitignored. `scripts/test_click_deploy_package.py` checks
+  `git ls-files` to ensure no binaries are committed; it is fine to leave the
+  local `tools/` cache populated between packaging runs.
 - **Do not reintroduce picotool on Windows.** picotool cannot talk to the
   RP2040 BOOTSEL device without a Zadig/WinUSB driver on Windows (confirmed in
   the field: "RP2040 device ... appears to be in BOOTSEL mode, but picotool
@@ -92,9 +90,17 @@ of `flasher/<platform>/` after zipping so the scaffold stays clean.
 ## Bundled Windows tools
 
 For a fully self-contained Windows package, `package.sh` downloads the pinned
-`esptool` release (version via `ESPTOOL_VERSION`, currently 5.3.1) from the
-official GitHub releases into
+`esptool` release (version via `ESPTOOL_VERSION`, currently 5.3.1) into
 `tools/esptool/windows-amd64/esptool.exe`.
+
+By default the download tries a domestic GitHub mirror first and falls back to
+the official GitHub URL if the mirror fails. Override with `ESPTOOL_BASE_URL`
+to use a single custom source, for example:
+
+```sh
+ESPTOOL_BASE_URL=https://github.com/espressif/esptool/releases/download \
+  ./click_deploy/flasher/package.sh
+```
 
 picotool is intentionally **not** bundled for Windows; the UF2-drive method
 works with the built-in Windows mass-storage driver.
@@ -104,6 +110,7 @@ works with the built-in Windows mass-storage driver.
 `package.sh` downloads the four common `esptool` binaries
 (`macos-amd64`, `macos-arm64`, `linux-amd64`, `linux-aarch64`) so the single
 `macos_linux` bundle works on both operating systems and both architectures.
+The same `ESPTOOL_BASE_URL` override applies.
 
 `picotool` is **not** auto-downloaded because reliable official prebuilt
 binaries are not available. If a `picotool` binary is manually placed in

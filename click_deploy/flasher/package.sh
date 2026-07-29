@@ -17,6 +17,11 @@
 #
 # Non-interactive override (useful for CI/testing):
 #   PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
+#
+# By default esptool is downloaded through a domestic GitHub mirror, falling
+# back to the official GitHub release URL if the mirror fails. Override with:
+#   ESPTOOL_BASE_URL=https://github.com/espressif/esptool/releases/download \
+#       ./click_deploy/flasher/package.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +30,10 @@ DEPLOY_DIR="$REPO_ROOT/click_deploy"
 FLASHER_DIR="$DEPLOY_DIR/flasher"
 
 ESPTOOL_VERSION="${ESPTOOL_VERSION:-5.3.1}"
+# Default download sources: domestic GitHub mirror first, then the official URL.
+# Set ESPTOOL_BASE_URL to use a single custom source.
+ESPTOOL_MIRROR_URL="https://ghproxy.com/https://github.com/espressif/esptool/releases/download"
+ESPTOOL_OFFICIAL_URL="https://github.com/espressif/esptool/releases/download"
 
 need_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -168,17 +177,46 @@ download_esptool() {
         return 0
     fi
 
-    echo "  downloading esptool v$ESPTOOL_VERSION for $platform"
-    local zip_url="https://github.com/espressif/esptool/releases/download/v${ESPTOOL_VERSION}/esptool-v${ESPTOOL_VERSION}-${platform}.zip"
-    local work_dir
-    work_dir=$(mktemp -d)
+    local urls=("$ESPTOOL_MIRROR_URL" "$ESPTOOL_OFFICIAL_URL")
+    if [ -n "${ESPTOOL_BASE_URL:-}" ]; then
+        urls=("$ESPTOOL_BASE_URL")
+    fi
 
-    curl -fL --retry 3 -o "$work_dir/esptool.zip" "$zip_url"
-    mkdir -p "$dest_dir"
-    unzip -j -o "$work_dir/esptool.zip" "esptool-${platform}/esptool*" -d "$dest_dir" >/dev/null
-    chmod +x "$dest_dir"/esptool* 2>/dev/null || true
-    rm -rf "$work_dir"
-    echo "  downloaded esptool for $platform"
+    local last_err=""
+    for base in "${urls[@]}"; do
+        local archive
+        local archive_member
+        if [[ "$platform" == windows-* ]]; then
+            archive="esptool-v${ESPTOOL_VERSION}-${platform}.zip"
+            archive_member="esptool-${platform}/esptool*"
+        else
+            archive="esptool-v${ESPTOOL_VERSION}-${platform}.tar.gz"
+            archive_member="esptool-${platform}/esptool"
+        fi
+        local tool_url="${base}/v${ESPTOOL_VERSION}/${archive}"
+        echo "  trying $tool_url"
+        local work_dir
+        work_dir=$(mktemp -d)
+        if curl -fL --retry 2 --max-time 180 -o "$work_dir/$archive" "$tool_url" 2>/dev/null; then
+            mkdir -p "$dest_dir"
+            if [[ "$platform" == windows-* ]]; then
+                unzip -j -o "$work_dir/$archive" "$archive_member" -d "$dest_dir" >/dev/null
+            else
+                tar -xzf "$work_dir/$archive" -C "$work_dir" "$archive_member"
+                cp "$work_dir/$archive_member" "$dest_dir/"
+            fi
+            chmod +x "$dest_dir"/esptool* 2>/dev/null || true
+            rm -rf "$work_dir"
+            echo "  downloaded esptool for $platform"
+            return 0
+        else
+            last_err="curl failed for $tool_url"
+            rm -rf "$work_dir"
+        fi
+    done
+
+    echo "  failed to download esptool for $platform: $last_err" >&2
+    return 1
 }
 
 ensure_tools() {
