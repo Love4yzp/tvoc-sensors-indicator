@@ -5,45 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 PORT="${1:-${RP2040_PORT:-}}"
 
-# In a packaged bundle, firmware and tools sit next to the script.
-# In the repo scaffold, they live two levels up in click_deploy/.
-resolve_bundle_or_repo() {
-  local name="$1"
-  if [ -e "$SCRIPT_DIR/$name" ]; then
-    echo "$SCRIPT_DIR/$name"
-  else
-    echo "$SCRIPT_DIR/../../$name"
-  fi
-}
-
-FW_ROOT="$(resolve_bundle_or_repo firmware)"
-TOOLS_ROOT="$(resolve_bundle_or_repo tools)"
-ELF="$FW_ROOT/rp2040/firmware.elf"
+ELF="$SCRIPT_DIR/firmware/rp2040/firmware.elf"
 
 if [ ! -f "$ELF" ]; then
   echo "Missing RP2040 firmware: $ELF" >&2
   exit 1
 fi
 
-platform_dir() {
-  case "$(uname -s):$(uname -m)" in
-    Darwin:arm64)  echo "macos-arm64" ;;
-    Darwin:x86_64) echo "macos-amd64" ;;
-    Linux:x86_64)  echo "linux-amd64" ;;
-    Linux:aarch64|Linux:arm64) echo "linux-aarch64" ;;
-    *) echo "" ;;
-  esac
-}
-
-PICOTOOL=""
-PLATFORM_DIR="$(platform_dir)"
-if [ -n "$PLATFORM_DIR" ] && [ -x "$TOOLS_ROOT/picotool/$PLATFORM_DIR/picotool" ]; then
-  PICOTOOL="$TOOLS_ROOT/picotool/$PLATFORM_DIR/picotool"
-elif command -v picotool >/dev/null 2>&1; then
-  PICOTOOL="$(command -v picotool)"
-else
-  echo "No bundled picotool and no picotool on PATH." >&2
-  exit 1
+PICOTOOL="$SCRIPT_DIR/tools/picotool/picotool"
+if [ ! -x "$PICOTOOL" ]; then
+  if command -v picotool >/dev/null 2>&1; then
+    PICOTOOL="$(command -v picotool)"
+  else
+    echo "No bundled picotool and no picotool on PATH." >&2
+    exit 1
+  fi
 fi
 
 picotool_device_count() {

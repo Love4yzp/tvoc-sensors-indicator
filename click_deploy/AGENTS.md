@@ -2,8 +2,8 @@
 
 This folder is the packaging scaffold for the no-toolchain flashing bundle of
 the SenseCAP Indicator firmware (ESP32-S3 screen side + RP2040 sensor
-coprocessor). The shipped artifacts are per-platform zips under
-`click_deploy/flasher/`. Read this before changing anything here.
+coprocessor). Shipped artifacts are single-target zips written to
+`click_deploy/dist/`. Read this before changing anything here.
 
 ## Golden rules
 
@@ -19,6 +19,10 @@ coprocessor). The shipped artifacts are per-platform zips under
   the built-in Windows driver. The macOS/Linux scripts still use `picotool`
   from PATH (or a bundled binary if present) — that is fine there, do not
   "unify" them onto the Windows scheme without a reason.
+- **Keep `flash_esp32s3.*` and `flash_rp2040.*` as separate, independently
+  runnable scripts.** The RP2040 flash step doesn't always succeed on the
+  first try (BOOTSEL detection can flake) and needs to be retried on its own
+  without re-flashing the ESP32-S3. `flash_all.*` just runs both in sequence.
 - **Do not change ESP32-S3 flash offsets/settings casually.** The PowerShell
   and shell scripts hardcode `0x0 bootloader / 0x8000 partition-table /
   0x10000 app` with `--flash_mode dio --flash_size 8MB --flash_freq 80m`,
@@ -26,60 +30,56 @@ coprocessor). The shipped artifacts are per-platform zips under
   config ever changes these, update the scripts and this file together.
 - MQTT topics, partition layout, and other product behavior are out of scope
   here — this folder only packages and flashes what `build/` produced.
+- **Firmware is read directly from `../build/` and `../rp2040/.pio/build/...`
+  at package time.** There is no intermediate `click_deploy/firmware/`
+  staging copy — don't reintroduce one.
+- **Every bundle ships exactly one `esptool` binary**, matching its target.
+  Don't bundle multiple architectures into one zip — that's what the 4
+  separate targets are for.
 
 ## Directory layout
 
 ```text
 click_deploy/
-  firmware/              # latest built firmware (single source of truth)
-    esp32s3/             # bootloader.bin, partition-table.bin, indicator_ha.bin, flasher_args.json
-    rp2040/              # firmware.elf, firmware.uf2
-  tools/                 # downloaded flashing tools
-    esptool/             # per-platform binaries
-    picotool/            # macOS/Linux only, optional
-  flasher/               # platform-specific end-user bundles
-    package.sh           # interactive maintainer packaging entry point
-    macos_linux/         # shell scripts + firmware + tools (when populated)
-    windows/             # PowerShell scripts + firmware + tools (when populated)
+  package.sh              # packaging entry point, takes a target argument
+  scripts/                # flashing scripts shipped inside every bundle
+    macos_linux/           # shared by macos-arm64, linux-amd64, linux-aarch64
+    windows/                # windows-amd64 only
+  tools/                  # local esptool download cache, per target
+    esptool/<target>/
+  dist/                   # packaging output, fully gitignored, disposable
+    indicator_ha-<target>-<git-hash>/
+    indicator_ha-<target>-<git-hash>.zip
 ```
 
 ## Packaging workflow (maintainer)
 
-One interactive command from the repository root:
-
 ```sh
-./click_deploy/flasher/package.sh
+./click_deploy/package.sh <target>
+# targets: macos-arm64 | linux-amd64 | linux-aarch64 | windows-amd64
 ```
 
-It prompts for platform and chip combination, checks firmware freshness,
-rebuilds if necessary, syncs into `click_deploy/firmware/`, downloads/arranges
-tools, assembles the bundle, and writes:
+Run with no argument for an interactive prompt. It checks firmware freshness,
+rebuilds if necessary (`FORCE_BUILD=1` to force), downloads/caches the
+matching `esptool` binary, assembles the bundle straight from `build/` and
+`rp2040/.pio/build/...`, and writes:
 
 ```text
-click_deploy/flasher/indicator_ha-<platform>-<chips>.zip
+click_deploy/dist/indicator_ha-<target>-<git-hash>.zip
 ```
 
-Non-interactive override for CI:
-
-```sh
-PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
-```
-
-Force a rebuild:
-
-```sh
-FORCE_BUILD=1 PLATFORM=macos_linux CHIPS=esp32s3 ./click_deploy/flasher/package.sh
-```
-
-The packaging script cleans populated `firmware/` and `tools/` directories out
-of `flasher/<platform>/` after zipping so the scaffold stays clean.
+`<git-hash>` = `git rev-parse --short HEAD`, `-dirty` suffix if the working
+tree has uncommitted changes.
 
 ## How the bundles work
 
-- Each bundle is self-contained: scripts, firmware images, and required tools
-  are copied in at package time. The flash scripts look for `firmware/` and
-  `tools/` next to themselves first, and fall back two levels up to the
-  `click_deploy/` scaffold when running from the repo.
+- Each bundle is self-contained: scripts, firmware images, and the matching
+  `esptool` binary are assembled fresh into `dist/indicator_ha-<target>-<hash>/`
+  every run (that directory is wiped first — no stale leftovers).
+- Scripts always find `firmware/` and `tools/` as direct siblings inside the
+  bundle — there is no "bundle vs. repo scaffold" dual-path logic since
+  `scripts/` is never run in place, only after `package.sh` assembles it into
+  `dist/`.
 - `flash_all.*` runs `flash_rp2040.*` first, then `flash_esp32s3.*`.
 - Flash scripts are non-interactive: they auto-detect ports and execute.
   Environment variables override auto-detection:
@@ -87,49 +87,33 @@ of `flasher/<platform>/` after zipping so the scaffold stays clean.
   - `RP2040_PORT` / first positional argument for RP2040.
   - `ESP_BAUD` for ESP32-S3 baud rate.
 
-## Bundled Windows tools
+## Bundled tools
 
-For a fully self-contained Windows package, `package.sh` downloads the pinned
-`esptool` release (version via `ESPTOOL_VERSION`, currently 5.3.1) into
-`tools/esptool/windows-amd64/esptool.exe`.
+`package.sh` downloads the pinned `esptool` release (version via
+`ESPTOOL_VERSION`, currently 5.3.1) for whichever single target is being
+packaged, caching it under `tools/esptool/<target>/`. Default download tries
+a domestic GitHub mirror first, falling back to the official GitHub URL.
+Override with `ESPTOOL_BASE_URL` to use a single custom source.
 
-By default the download tries a domestic GitHub mirror first and falls back to
-the official GitHub URL if the mirror fails. Override with `ESPTOOL_BASE_URL`
-to use a single custom source, for example:
-
-```sh
-ESPTOOL_BASE_URL=https://github.com/espressif/esptool/releases/download \
-  ./click_deploy/flasher/package.sh
-```
-
-picotool is intentionally **not** bundled for Windows; the UF2-drive method
-works with the built-in Windows mass-storage driver.
-
-## Bundled macOS/Linux tools
-
-`package.sh` downloads the four common `esptool` binaries
-(`macos-amd64`, `macos-arm64`, `linux-amd64`, `linux-aarch64`) so the single
-`macos_linux` bundle works on both operating systems and both architectures.
-The same `ESPTOOL_BASE_URL` override applies.
-
-`picotool` is **not** auto-downloaded because reliable official prebuilt
-binaries are not available. If a `picotool` binary is manually placed in
-`tools/picotool/<platform-dir>/`, `package.sh` will include it; otherwise the
-flash script falls back to `picotool` on PATH.
+`picotool` is intentionally **not** auto-downloaded (no reliable official
+prebuilt binaries). If a `picotool` binary is manually placed in
+`tools/picotool/<target>/picotool`, `package.sh` includes it in macOS/Linux
+bundles; otherwise the flash script falls back to `picotool` on PATH. Not
+used on Windows — see the golden rule above.
 
 ## Verification after any change here
 
 ```sh
 python3 scripts/test_click_deploy_package.py   # scaffold guard (needs clean folder)
-bash -n click_deploy/flasher/package.sh        # packaging script syntax
-bash -n click_deploy/flasher/macos_linux/*.sh  # shell flash scripts
+bash -n click_deploy/package.sh                # packaging script syntax
+bash -n click_deploy/scripts/macos_linux/*.sh  # shell flash scripts
 ```
 
 PowerShell scripts can be parse-checked on any OS with `pwsh`:
 
 ```powershell
 [System.Management.Automation.Language.Parser]::ParseFile(
-    "click_deploy/flasher/windows/flash_esp32s3.ps1", [ref]$null, [ref]$null)
+    "click_deploy/scripts/windows/flash_esp32s3.ps1", [ref]$null, [ref]$null)
 ```
 
 Real flashing can only be verified on actual target machines — say so in the

@@ -1,14 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
-
-# In a packaged bundle, firmware sits next to the script.
-# In the repo scaffold, it lives two levels up in click_deploy/.
-$BundleFw = Join-Path $ScriptDir "firmware"
-$RepoFw = Join-Path $RepoRoot "firmware"
-$FwDir = if (Test-Path (Join-Path $BundleFw "rp2040\firmware.uf2")) { $BundleFw } else { $RepoFw }
-
+$FwDir = Join-Path $ScriptDir "firmware"
 $Uf2 = Join-Path $FwDir "rp2040\firmware.uf2"
 $Port = if ($args.Count -gt 0) { $args[0] } elseif ($env:RP2040_PORT) { $env:RP2040_PORT } else { "" }
 

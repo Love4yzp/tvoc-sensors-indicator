@@ -1,19 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
-
-# In a packaged bundle, firmware and tools sit next to the script.
-# In the repo scaffold, they live two levels up in click_deploy/.
-$BundleFw = Join-Path $ScriptDir "firmware"
-$RepoFw = Join-Path $RepoRoot "firmware"
-$FwDir = if (Test-Path (Join-Path $BundleFw "esp32s3\indicator_ha.bin")) { $BundleFw } else { $RepoFw }
-
-$BundleTools = Join-Path $ScriptDir "tools"
-$RepoTools = Join-Path $RepoRoot "tools"
-$ToolsDir = if (Test-Path $BundleTools) { $BundleTools } else { $RepoTools }
-
-$BundledEsptool = Join-Path $ToolsDir "esptool\windows-amd64\esptool.exe"
+$FwDir = Join-Path $ScriptDir "firmware"
+$BundledEsptool = Join-Path $ScriptDir "tools\esptool\esptool.exe"
 
 $Baud = if ($env:ESP_BAUD) { $env:ESP_BAUD } else { "460800" }
 $Port = if ($args.Count -gt 0) { $args[0] } elseif ($env:ESPPORT) { $env:ESPPORT } else { "" }

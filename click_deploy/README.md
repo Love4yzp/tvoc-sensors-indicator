@@ -1,100 +1,71 @@
 # SenseCAP Indicator Click Deploy
 
-This folder packages the SenseCAP Indicator firmware into self-contained,
-per-platform flasher bundles:
+This folder packages the SenseCAP Indicator firmware (ESP32-S3 + RP2040) into
+self-contained, single-target flasher zips.
 
-- `firmware/` — latest built firmware images (single source of truth).
-- `tools/` — downloaded flashing tools per platform/architecture.
-- `flasher/` — platform-specific bundles for end users.
-  - `macos_linux/` — shell scripts for macOS and Linux.
-  - `windows/` — PowerShell scripts for Windows.
-  - `package.sh` — interactive maintainer script that builds, syncs, and zips.
+- `package.sh` — packaging script: builds if stale, pulls firmware straight
+  from `../build/` and `../rp2040/.pio/build/...`, and zips a bundle.
+- `scripts/` — the flashing scripts shipped inside every bundle.
+  - `macos_linux/` — shell scripts (used by `macos-arm64`, `linux-amd64`,
+    `linux-aarch64`).
+  - `windows/` — PowerShell scripts (used by `windows-amd64`).
+- `tools/` — local cache of downloaded `esptool` binaries, one per target.
+  Populated on demand and reused across runs; never committed.
+- `dist/` — packaging output (unzipped bundle + zip). Fully gitignored,
+  disposable, wiped and rebuilt every run.
 
-The repository does **not** commit generated firmware images or flashing tool
-binaries. Build outputs are copied into this folder when preparing a release
-package.
+Firmware images and tool binaries are never committed. `build/` is the single
+source of truth; this folder only reads from it at package time.
 
 ## Maintainer workflow
 
-Run the interactive packaging script from the repository root:
-
 ```sh
-./click_deploy/flasher/package.sh
+./click_deploy/package.sh <target>
+# targets: macos-arm64 | linux-amd64 | linux-aarch64 | windows-amd64
 ```
 
-It will ask for:
+Run with no argument for an interactive prompt. The script:
 
-1. Platform: `macos_linux` or `windows`
-2. Chips: `esp32s3`, `rp2040`, or `both`
+- Checks whether firmware is up to date against the source tree; rebuilds via
+  `./dev build` / `./dev rp2040 build` if stale (or if `FORCE_BUILD=1`).
+- Downloads the `esptool` binary for the target if not already cached under
+  `tools/esptool/<target>/`.
+- Assembles `dist/indicator_ha-<target>-<git-hash>/` directly from `build/`
+  and `rp2040/.pio/build/...` (no intermediate staging copy).
+- Zips it to `dist/indicator_ha-<target>-<git-hash>.zip`.
 
-Then it:
+`<git-hash>` is the short commit hash (`git rev-parse --short HEAD`), with a
+`-dirty` suffix if the working tree has uncommitted changes — so bundles from
+different builds are easy to tell apart.
 
-- Checks whether the requested firmware is up to date against the source tree.
-- Rebuilds via `./dev build` or `./dev rp2040 build` if stale.
-- Syncs the artifacts into `click_deploy/firmware/`.
-- Downloads the pinned `esptool` release if the tool is missing.
-- Assembles a self-contained bundle under `flasher/<platform>/`.
-- Writes `click_deploy/flasher/indicator_ha-<platform>-<chips>.zip`.
-- Cleans the populated `firmware/` and `tools/` directories out of the bundle
-  scaffold afterward.
-
-For CI or non-interactive use, set the two variables before running:
+Force a rebuild even if firmware looks fresh:
 
 ```sh
-PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
+FORCE_BUILD=1 ./click_deploy/package.sh macos-arm64
 ```
 
-To force a rebuild even when the script thinks the firmware is fresh:
-
-```sh
-FORCE_BUILD=1 PLATFORM=macos_linux CHIPS=both ./click_deploy/flasher/package.sh
-```
-
-To use a different `esptool` download source (the default tries a domestic
-GitHub mirror first, then falls back to the official GitHub URL):
+Use a different `esptool` download source (default tries a domestic GitHub
+mirror first, then falls back to the official GitHub URL):
 
 ```sh
 ESPTOOL_BASE_URL=https://github.com/espressif/esptool/releases/download \
-  PLATFORM=windows CHIPS=both ./click_deploy/flasher/package.sh
+  ./click_deploy/package.sh windows-amd64
 ```
 
-### Manual build + sync (without packaging)
-
-If you only want to update `click_deploy/firmware/` without producing a zip:
-
-```sh
-./dev build
-./dev rp2040 build
-```
-
-Then run the packaging script and stop after the sync step, or copy the files
-from `build/` and `rp2040/.pio/build/indicator_rp2040/` manually.
-
-## Layout of a complete package
+## Layout of a packaged bundle
 
 ```text
-click_deploy/
+indicator_ha-<target>-<git-hash>/
   firmware/
     esp32s3/      bootloader.bin, partition-table.bin, indicator_ha.bin, flasher_args.json
     rp2040/       firmware.elf, firmware.uf2
   tools/
-    esptool/      per-platform binaries
+    esptool/      single binary matching <target>
     picotool/     macOS/Linux only, optional (falls back to PATH)
-  flasher/
-    package.sh
-    macos_linux/
-      flash_all.sh
-      flash_esp32s3.sh
-      flash_rp2040.sh
-      install.sh
-      firmware/...
-      tools/...
-    windows/
-      flash_all.ps1
-      flash_esp32s3.ps1
-      flash_rp2040.ps1
-      firmware/...
-      tools/...
+  flash_all.sh / flash_all.ps1       runs rp2040 then esp32s3
+  flash_esp32s3.sh / flash_esp32s3.ps1
+  flash_rp2040.sh / flash_rp2040.ps1
+  install.sh                         (macOS/Linux only) chmod +x helper
 ```
 
 ## End-user flashing
@@ -104,23 +75,24 @@ click_deploy/
 Unzip the bundle and run:
 
 ```sh
-cd indicator_ha-macos_linux-both
-./macos_linux/install.sh
-./macos_linux/flash_all.sh
+cd indicator_ha-macos-arm64-abc1234
+./install.sh
+./flash_all.sh
 ```
 
-To flash only one chip:
+To flash only one chip — useful since the RP2040 flash step doesn't always
+succeed on the first try and may need a retry without touching the ESP32-S3:
 
 ```sh
-./macos_linux/flash_esp32s3.sh
-./macos_linux/flash_rp2040.sh
+./flash_esp32s3.sh
+./flash_rp2040.sh
 ```
 
 To pin serial ports:
 
 ```sh
-ESPPORT=/dev/cu.usbmodemXXXX ./macos_linux/flash_esp32s3.sh
-RP2040_PORT=/dev/cu.usbmodemYYYY ./macos_linux/flash_rp2040.sh
+ESPPORT=/dev/cu.usbmodemXXXX ./flash_esp32s3.sh
+RP2040_PORT=/dev/cu.usbmodemYYYY ./flash_rp2040.sh
 ```
 
 ### Windows PowerShell
@@ -128,14 +100,14 @@ RP2040_PORT=/dev/cu.usbmodemYYYY ./macos_linux/flash_rp2040.sh
 Unzip the bundle and run:
 
 ```powershell
-cd indicator_ha-windows-both
-.\windows\flash_all.ps1
+cd indicator_ha-windows-amd64-abc1234
+.\flash_all.ps1
 ```
 
 If Windows blocks the scripts with an execution-policy error, run once with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\windows\flash_all.ps1
+powershell -ExecutionPolicy Bypass -File .\flash_all.ps1
 ```
 
 To pin serial ports:
@@ -143,13 +115,13 @@ To pin serial ports:
 ```powershell
 $env:ESPPORT = "COM7"
 $env:RP2040_PORT = "COM8"
-.\windows\flash_all.ps1
+.\flash_all.ps1
 ```
 
 ## Tooling notes
 
-- The ESP32-S3 scripts prefer the bundled `esptool` binary for the running
-  platform and fall back to `esptool` / `esptool.py` on PATH.
+- Each bundle ships exactly one `esptool` binary, matching its target — the
+  scripts don't need to sniff the host architecture.
 - The RP2040 is flashed differently per platform:
   - **macOS / Linux:** `picotool` (bundled if present, otherwise from PATH).
   - **Windows:** copy `firmware.uf2` onto the `RPI-RP2` BOOTSEL USB drive. No
@@ -157,3 +129,6 @@ $env:RP2040_PORT = "COM8"
 - `esptool` v5 prints deprecation warnings for the underscore-style arguments
   (`write_flash`, `--flash_mode`, ...) used by the scripts; they still work, and
   the same arguments also run on the older `esptool` v4 shipped with ESP-IDF.
+- `picotool` is not auto-downloaded (no reliable prebuilt binaries). Drop one
+  manually into `tools/picotool/<target>/picotool` to have `package.sh`
+  bundle it; otherwise the flash script falls back to PATH.
