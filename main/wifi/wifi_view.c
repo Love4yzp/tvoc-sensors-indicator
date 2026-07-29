@@ -121,7 +121,9 @@ static void _show_wifi_modal(void) {
 }
 
 static void _on_wifi_icon_clicked(lv_event_t *e) {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    /* Use long press for the same reason as the Settings gear: brief phantom
+     * touches should not open modals. A real intentional tap lasts > 400 ms. */
+    if(lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
     _show_wifi_modal();
 }
 
@@ -134,13 +136,15 @@ static void _ensure_wifi_status_icon(void) {
     lv_obj_t *button = lv_button_create(tile);
     lv_obj_set_size(button, 60, 60);
     lv_obj_set_align(button, LV_ALIGN_TOP_RIGHT);
-    lv_obj_set_pos(button, -10, 10);
+    /* Keep the Wi-Fi icon away from the panel corner to avoid the same idle
+     * phantom-touch artifacts that can open Settings without user input. */
+    lv_obj_set_pos(button, -20, 20);
     lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(button, lv_color_hex(0x101418),
                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(button, LV_OPA_COVER,
                             LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_add_event_cb(button, _on_wifi_icon_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(button, _on_wifi_icon_clicked, LV_EVENT_LONG_PRESSED, NULL);
 
     s_wifi_icon = lv_image_create(button);
     lv_image_set_src(s_wifi_icon, &ui_img_wifi_disconet_png);

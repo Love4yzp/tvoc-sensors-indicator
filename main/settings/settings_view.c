@@ -102,7 +102,10 @@ void settings_view_show(void)
 
 static void settings_on_gear(lv_event_t *e)
 {
-	if(lv_event_get_code(e) == LV_EVENT_CLICKED)
+	/* Require a long press to open Settings. Brief phantom touches (the ones
+	 * that have been opening Settings by themselves) are too short to trigger
+	 * LV_EVENT_LONG_PRESSED, while a real finger press easily does. */
+	if(lv_event_get_code(e) == LV_EVENT_LONG_PRESSED)
 	{
 		settings_view_show();
 	}
@@ -159,7 +162,11 @@ static void settings_create_gear_button(lv_obj_t *tile)
 	lv_obj_t *button = lv_button_create(tile);
 	lv_obj_set_size(button, 52, 52);
 	lv_obj_set_align(button, LV_ALIGN_TOP_LEFT);
-	lv_obj_set_pos(button, 14, 14);
+	/* Inset from the panel corners to avoid idle phantom touches that have
+	 * historically opened Settings without user input (see ft5x06.c THGROUP
+	 * comment). 22 px leaves the gear clearly reachable while staying outside
+	 * the typical corner touch-artifact zone. */
+	lv_obj_set_pos(button, 22, 22);
 	lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_style_bg_color(button, lv_color_hex(0x101418),
 							  LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -173,7 +180,7 @@ static void settings_create_gear_button(lv_obj_t *tile)
 	lv_obj_set_style_radius(button, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_pad_all(button, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 	lv_obj_set_style_shadow_width(button, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-	lv_obj_add_event_cb(button, settings_on_gear, LV_EVENT_CLICKED, NULL);
+	lv_obj_add_event_cb(button, settings_on_gear, LV_EVENT_LONG_PRESSED, NULL);
 
 	lv_obj_t *label = lv_label_create(button);
 	lv_label_set_text(label, LV_SYMBOL_SETTINGS);

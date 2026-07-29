@@ -121,16 +121,18 @@ esp_err_t ft5x06_init(void)
     // Touch difference threshold
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THDIFF, 20);
 
-    // Delay to enter 'Monitor' status (s). Keep the panel in fast 'Active' mode
-    // across short typing pauses so the first tap after a pause is not delayed.
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_TIME_ENTER_MONITOR, 10);
+    // Delay to enter 'Monitor' status (s). Match the upstream SenseCAP
+    // Indicator BSP: drop out of the high-sensitivity Active mode quickly so
+    // idle corner noise does not register as phantom touches.
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_TIME_ENTER_MONITOR, 2);
 
     // Period of 'Active' status (ms)
     i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODACTIVE, 12);
 
-    // Timer to enter 'idle' when in 'Monitor' (ms). 20ms report period halves
-    // the worst-case latency of a tap that arrives while in Monitor mode.
-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODMONITOR, 20);
+    // Timer to enter 'idle' when in 'Monitor' (ms). Use the upstream 40 ms
+    // period; the faster 20 ms setting made the panel too sensitive in Monitor
+    // mode and contributed to corner phantom touches.
+    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODMONITOR, 40);
 
     return ESP_OK;
 }

@@ -83,6 +83,26 @@ static void button_read(lv_indev_t *indev, lv_indev_data_t *data)
     data->key = last_key;
 }
 
+/* The FT5x06 panel can report idle phantom touches near the corners (especially
+ * top-left/top-right where the Settings and Wi-Fi buttons sit). Drop any touch
+ * that lands inside a margin around the four corners before LVGL sees it. This
+ * is a last-line software defence; legitimate UI elements are not placed this
+ * close to the screen edges. */
+#define LV_PORT_TOUCH_CORNER_MARGIN 30
+
+static bool _touch_in_corner_dead_zone(int32_t x, int32_t y)
+{
+    const int32_t margin = LV_PORT_TOUCH_CORNER_MARGIN;
+    const int32_t w = CONFIG_LCD_EVB_SCREEN_WIDTH;
+    const int32_t h = CONFIG_LCD_EVB_SCREEN_HEIGHT;
+
+    if (x < margin && y < margin) return true;                /* top-left     */
+    if (x >= w - margin && y < margin) return true;           /* top-right    */
+    if (x < margin && y >= h - margin) return true;           /* bottom-left  */
+    if (x >= w - margin && y >= h - margin) return true;      /* bottom-right */
+    return false;
+}
+
 static void touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
@@ -96,11 +116,19 @@ static void touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
     }
 
     if (indev_data.pressed) {
-        data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = CONFIG_LCD_EVB_SCREEN_WIDTH - indev_data.x;
-        data->point.y = CONFIG_LCD_EVB_SCREEN_HEIGHT - indev_data.y;
-        x = data->point.x;
-        y = data->point.y;
+        int32_t tx = CONFIG_LCD_EVB_SCREEN_WIDTH - indev_data.x;
+        int32_t ty = CONFIG_LCD_EVB_SCREEN_HEIGHT - indev_data.y;
+
+        if (_touch_in_corner_dead_zone(tx, ty)) {
+            /* Phantom corner touch: pretend the finger was lifted. */
+            data->state = LV_INDEV_STATE_RELEASED;
+        } else {
+            data->state = LV_INDEV_STATE_PRESSED;
+            x = tx;
+            y = ty;
+        }
+        data->point.x = x;
+        data->point.y = y;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
         data->point.x = x;
