@@ -58,7 +58,7 @@ else
   echo "To pin a port, run: ESPPORT=/dev/cu.usbmodemXXXX $SCRIPT_PATH"
 fi
 
-"$ESPTOOL" --chip esp32s3 "${PORT_ARGS[@]}" --baud "$BAUD" \
+"$ESPTOOL" --chip esp32s3 "${PORT_ARGS[@]:-}" --baud "$BAUD" \
   --before default_reset --after hard_reset \
   write_flash --flash_mode dio --flash_size 8MB --flash_freq 80m \
   0x0 "$FW/bootloader.bin" \
