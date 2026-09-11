@@ -90,8 +90,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 static void handle_wifi_status_change(const struct view_data_wifi_st *wifi_status)
 {
-    ESP_LOGI(TAG, "WiFi status changed. Connected: %d", wifi_status->is_network);
-    if (wifi_status->is_network && instance_ptr->is_using) {
+    /* has_ip (LAN up), not is_network (internet): broker is usually local. */
+    ESP_LOGI(TAG, "WiFi status changed. has_ip: %d", wifi_status->has_ip);
+    if (wifi_status->has_ip && instance_ptr->is_using) {
         esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE, MQTT_APP_START, &instance_ptr, sizeof(instance_mqtt_t), portMAX_DELAY);
     } else {
         /* TODO: Implement MQTT shutdown logic if needed */

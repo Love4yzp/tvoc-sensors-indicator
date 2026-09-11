@@ -18,6 +18,14 @@ Topics follow `<topic_prefix>/<device_name>/<leaf>`:
 | `status` | On connect / disconnect | QoS 1, Retained | `online` on connect; broker LWT publishes `offline` |
 | `data` | Every 5 s (NTP-gated) | QoS 0, Not retained | JSON payload with 8 metrics + metadata |
 
+The MQTT client starts as soon as the STA has an IP (`has_ip`), regardless of
+internet reachability — brokers on isolated LANs work. Data publishes stay
+held until the clock is NTP-synced; the NTP server defaults to `pool.ntp.org`
+and is configurable (Settings → MQTT screen, "NTP Server" field, or
+`setmqtt -s <server>`) so isolated LANs can point at a local time source.
+Without a reachable NTP server, `status` still shows `online` but `data`
+stays silent — check this first when a subscriber sees nothing.
+
 ### Data Payload Format
 
 ```json
