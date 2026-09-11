@@ -1,6 +1,6 @@
 # Firmware Architecture
 
-SenseCAP Indicator firmware for ESP32-S3 + RP2040. ESP-IDF v5.4, FreeRTOS, LVGL 9 via ESP Component Manager, esp-mqtt.
+SenseCAP Indicator firmware for ESP32-S3 + RP2040. ESP-IDF v5.5, FreeRTOS, LVGL 9 via ESP Component Manager, esp-mqtt.
 
 ---
 
@@ -16,25 +16,26 @@ main/
   view_data_types.h       Pure data types used by the event contract.
   lv_port.c               LVGL display/touch port. Owns lv_port_sem_take/give for LVGL thread safety.
 
-  nav/                    lv_tileview navigation for the main swipeable screens.
+  nav/                    lv_tileview navigation. Single-tile today: the SEN54 dashboard is the only tile; settings-style screens are modals on lv_layer_top().
   assets/                 LVGL 9 image/font descriptors used by handwritten screen components.
 
-  ha/                     Home Assistant domain: broker config, MQTT lifecycle, sensors, switches, screen widgets.
+  sen5x/                  SEN5x domain: MQTT publish logic (topics, payload, LWT status, VOC alert state machine).
+  ha/                     Home Assistant domain: broker config, MQTT lifecycle, sensors, legacy switch protocol, screen widgets.
   wifi/                   Wi-Fi domain: scanning, connection state, list/connect modals, status icon.
-  sensor/                 Built-in sensor cache/parser and sensor data view.
+  sensor/                 SEN54 data cache/parser (from RP2040 packets) and the sensor dashboard view.
   display/                LCD backlight, sleep mode, and display settings view.
+  settings/               Settings entry modal (gear button).
   rp2040/                 UART/COBS ingress from the RP2040 co-processor.
   btn/                    Physical button handling.
   mqtt/                   Shared MQTT client lifecycle controller.
   storage/                NVS helpers.
   cmd/                    Serial command interface.
+  ui/                     UI infrastructure: non-blocking event posts (ui_event), LVGL-task deferral (ui_defer), freeze monitor (ui_freeze_mon), PSRAM memory pool (ui_mem_pool).
 
   util/
     cobs.*                COBS encode/decode for RP2040 UART framing.
     indicator_util.*      IP address helpers.
 ```
-
-New work should go into the owning vertical domain, not into legacy compatibility folders.
 
 ---
 
@@ -58,7 +59,7 @@ app_main()
        → indicator_wifi_model_init → indicator_mqtt_init → indicator_ha_model_init
 ```
 
-View initialization runs before model initialization in the current code. Screen components must tolerate initial empty state and update when model events arrive.
+View initialization runs before model initialization. Screen components must tolerate initial empty state and update when model events arrive.
 
 ---
 
@@ -72,60 +73,43 @@ View initialization runs before model initialization in the current code. Screen
 | `cmd_cfg_event_handle` | `CMD_CFG_EVENT_BASE` | `cmd/cmd.c` | Serial command events |
 | default event loop | `WIFI_EVENT`, `IP_EVENT` | `wifi/wifi_model.c` | ESP-IDF Wi-Fi driver events |
 
-The event manifest lives in `view_data.h` / `view_data_types.h`. When changing an event payload, update all listed producers and consumers together.
+---
+
+## Architectural Patterns
+
+- **Vertical Domain Slices**: Each domain owns its model, view, and screen components behind a small public header (`ha.h`, `wifi.h`, `sensor.h`, etc.).
+- **Boundary Rule**: Cross-domain communication passes strictly through `view_event_handle`. Model files never own LVGL objects.
+- **Screen Ownership**:
+  - `create()` or `*_init()` builds widgets under a passed parent or `nav_get_tile()`.
+  - `update()` applies state; callers hold the LVGL lock unless documented otherwise.
+  - `destroy()` is only needed for dynamic modal lifetime.
 
 ---
 
-## LVGL Thread Safety
+## Crash & Freeze Debugging
 
-LVGL is not thread-safe. Any code touching widget state outside the LVGL task must hold the semaphore:
-
-```c
-lv_port_sem_take();
-// ... lv_obj_* calls ...
-lv_port_sem_give();
-```
-
-Allowed LVGL ownership is intentionally narrow:
-
-| Area | LVGL access |
-|------|-------------|
-| `lv_port.[ch]` | Display/touch port and LVGL lock |
-| `nav/nav.[ch]` | Tileview/page-root containers |
-| `*_view.c` and `*_screen.c` files | Domain widgets and callbacks |
-| model/controller files | No LVGL object ownership |
+- **Watchdog / Panic Backtrace Decoding**:
+  ```bash
+  ~/.espressif/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp32s3-elf-addr2line \
+    -e build/indicator_ha.elf -f -C -a <0x40/0x42 addresses>
+  ```
+  *(Top frames `esp_crosscore_isr` / `_xt_lowint1` are dump mechanisms, not crash sites).*
+- **Blocked Freezes vs Spinning**:
+  - A freeze with **no** serial watchdog output means a task is blocked on a mutex/queue with `portMAX_DELAY` (Task WDT cannot catch blocked tasks).
+  - `CONFIG_ESP_TASK_WDT_PANIC=y` and `CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y` ensure spinning loops dump stack to UART.
+- **Coredump Analysis**:
+  ```bash
+  espcoredump.py info_corefile -c <saved_dump_file> build/indicator_ha.elf
+  ```
+- **UI Freeze Monitor**: `main/ui/ui_freeze_mon.c` heartbeat-watches `taskLVGL` (8 s timeout) and aborts on deadlock to produce a full serial dump and auto-reboot.
 
 ---
 
-## Architectural Pattern
+## Development Guidelines
 
-The branch uses vertical domain slices. Each domain owns its model, view, and supporting screen components behind a small public header:
+Before modifying an event, inspect `main/view_data_types.h` manifest comments for all producers and consumers.
 
-- `ha/ha.h`
-- `wifi/wifi.h`
-- `sensor/sensor.h`
-- `display/display.h`
-- `rp2040/rp2040.h`
-- `mqtt/mqtt.h`
-- `storage/storage_nvs.h`
-- `cmd/cmd.h`
-- `btn/btn.h`
-
-Domain-to-domain communication should go through `view_event_handle` or a documented domain API. Do not reintroduce a horizontal compatibility layer or generated-UI globals.
-
-Screen components follow the local ownership pattern:
-
-- `create()` or `*_init()` builds widgets under a passed parent or a `nav_get_tile()` container.
-- `update()` applies state; callers must hold the LVGL lock unless the component documents that it locks internally.
-- `destroy()` is only needed for components with dynamic modal/widget lifetime.
-
----
-
-## Agent Working Guidelines
-
-Before modifying an event, read the manifest comment in `view_data.h` to find all producers and consumers.
-
-Before modifying a module, check its blast radius:
+Blast radius reference:
 
 | File/area | Blast radius |
 |-----------|-------------|
@@ -135,14 +119,10 @@ Before modifying a module, check its blast radius:
 | `nav/nav.c` | Main page container ownership |
 | `main/assets/` | Shared image/font descriptors |
 
-Verifying changes:
+Verification commands:
 
 ```bash
-python3 scripts/dev_check.py --skip-build
-python3 scripts/test_ha_switch_protocol.py   # for HA/MQTT protocol changes
-./dev build                                  # full firmware build when needed
+./dev test --no-host                          # fast python checks & protocol unit tests
+./dev test                                    # full host unit test suite
+./dev build                                   # full firmware build
 ```
-
-Adding a new event: add it to `view_data.h` with a full manifest comment before `VIEW_EVENT_ALL`.
-
-Adding a new page: add a tile in `nav/nav.h`, include the owning directory in `main/CMakeLists.txt`, build widgets in that domain's view/screen file, and call the view init function from `indicator_view.c`.
