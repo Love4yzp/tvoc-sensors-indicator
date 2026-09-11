@@ -107,7 +107,11 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 
 			_wifi_st_get(&st);
 			memset(st.ssid, 0, sizeof(st.ssid));
-			memcpy(st.ssid, event->ssid, event->ssid_len);
+			/* event->ssid_len can be 32 while st.ssid is char[32]: cap the copy
+			 * so the preceding memset's NUL survives (no unterminated string). */
+			size_t ssid_len = event->ssid_len < sizeof(st.ssid) ? event->ssid_len
+			                                                    : sizeof(st.ssid) - 1;
+			memcpy(st.ssid, event->ssid, ssid_len);
 			st.rssi = -50; // todo
 			st.is_connected = true;
 			st.is_connecting = false;
@@ -557,22 +561,28 @@ static void _do_scan_and_publish(void) {
 	int list_cnt = 0;
 	for(int i = 0; i < ap_count; i++)
 	{
+		/* wifi_ap_record_t.ssid is uint8_t[33] and NOT guaranteed NUL-terminated
+		 * for a 32-char SSID — bounce it through a bounded, terminated copy
+		 * before any strcmp/%s/strlcpy use. */
+		char ap_ssid[33];
+		memcpy(ap_ssid, ap_info[i].ssid, sizeof(ap_ssid) - 1);
+		ap_ssid[sizeof(ap_ssid) - 1] = '\0';
+
 		is_exist = false;
 		for(int j = 0; j < list_cnt; j++)
 		{
-			if(strcmp(list.aps[j].ssid, ap_info[i].ssid) == 0)
+			if(strcmp(list.aps[j].ssid, ap_ssid) == 0)
 			{
-				ESP_LOGI(TAG, "list exit ap:%s", ap_info[i].ssid);
+				ESP_LOGI(TAG, "list exit ap:%s", ap_ssid);
 				is_exist = true;
 				break;
 			}
 		}
 		if(!is_exist)
 		{
-			/* strlcpy, not strcpy: wifi_ap_record_t.ssid is 33 bytes but
-			 * view_data_wifi_item.ssid is 32 — a 32-char AP name would
-			 * overflow by one. */
-			strlcpy(list.aps[list_cnt].ssid, (const char*)ap_info[i].ssid, sizeof(list.aps[list_cnt].ssid));
+			/* view_data_wifi_item.ssid is 32 — a 32-char AP name must be
+			 * truncated, not overflowed. */
+			strlcpy(list.aps[list_cnt].ssid, ap_ssid, sizeof(list.aps[list_cnt].ssid));
 			list.aps[list_cnt].rssi = ap_info[i].rssi;
 			list.aps[list_cnt].auth_mode = (ap_info[i].authmode != WIFI_AUTH_OPEN);
 			list_cnt++;
