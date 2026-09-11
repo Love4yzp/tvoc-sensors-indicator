@@ -1,14 +1,6 @@
-# SenseCAP Indicator — Home Assistant Firmware
+# SenseCAP Indicator — SEN54 Air-Quality Panel
 
-Firmware that turns the [Seeed Studio SenseCAP Indicator](https://www.seeedstudio.com/SenseCAP-Indicator-D1-p-5643.html) into a Home Assistant companion panel. Connects to Wi-Fi, publishes built-in sensor data over MQTT, and renders on-screen controls that Home Assistant can drive both ways.
-
-<figure class="third">
-    <img align="left" src="./assets/Home Assistant Data.png" width="240"/>
-    <img align="center" src="./assets/Home Assistant.png" width="240"/>
-    <img align="left" src="./assets/Home Assistant Control(ON).png" width="240"/>
-    <img align="center" src="./assets/mqtt-address-panel.png" width="240"/>
-</figure>
-
+Firmware that turns the [Seeed Studio SenseCAP Indicator](https://www.seeedstudio.com/SenseCAP-Indicator-D1-p-5643.html) into a wall-mountable air-quality monitor. The built-in **Sensirion SEN54** sensor (PM1.0/2.5/4.0/10, humidity, temperature, VOC index) is rendered live on the 480×480 touchscreen and published to an MQTT broker for Home Assistant or any other consumer.
 
 ---
 
@@ -18,10 +10,9 @@ Firmware that turns the [Seeed Studio SenseCAP Indicator](https://www.seeedstudi
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [MQTT Protocol](#mqtt-protocol)
-- [Home Assistant Setup](#home-assistant-setup)
+- [Configuration](#configuration)
 - [Build & Flash](#build--flash)
 - [Console Commands](#console-commands)
-- [Configuration](#configuration)
 - [Development](#development)
 - [Version](#version)
 
@@ -29,30 +20,34 @@ Firmware that turns the [Seeed Studio SenseCAP Indicator](https://www.seeedstudi
 
 ## Features
 
-- [x] MQTT broker integration (configurable address, port, client ID, username, password)
-- [x] Built-in sensor publishing: temperature, humidity, CO₂ (SCD41), tVOC (SGP40/SHT41)
-- [x] Home Assistant control widgets: 6 binary switches + 2 numeric sliders
-- [x] Wi-Fi and MQTT configuration from the touchscreen
-- [x] MQTT broker configuration from the serial console (`setmqtt`, `mqtthelp`)
-- [x] NVS-backed persistence for Wi-Fi credentials, MQTT config, switch state
-- [x] Display brightness and sleep-mode controls
-- [ ] REST API
-- [ ] WebSocket
+- [x] SEN54 live dashboard: PM1.0/2.5/4.0/10, humidity, temperature, VOC index
+- [x] VOC alert level (0–3) with a 15-minute sensor warm-up guard after every boot
+- [x] MQTT publishing with configurable topic prefix/device name and retained LWT online/offline status
+- [x] Wi-Fi, MQTT broker, brightness and sleep-mode configuration from the touchscreen
+- [x] MQTT broker configuration from the serial console (`setmqtt`, `haconfig`, `mqtthelp`)
+- [x] NVS-backed persistence for Wi-Fi credentials, MQTT config, display settings
+- [x] Legacy Home Assistant switch protocol (6 binary switches + 2 sliders) still available
 
 ---
 
 ## Quick Start
 
-**Prerequisites:** ESP-IDF v5.4.x installed with `IDF_PATH` exported in your shell (see [ESP-IDF setup](https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32s3/get-started/)).
+**Prerequisites:** ESP-IDF **v5.5.x** installed (see [ESP-IDF setup](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/get-started/)). Either export `IDF_PATH` or define a `get_idf` shell alias:
+
+```bash
+# ~/.bashrc or ~/.zshrc
+alias get_idf='source ~/esp/esp-idf-v5.5.4/export.sh'   # adjust to your install
+```
 
 ```bash
 git clone <this-repo>
 cd sensecap-indicator-ha
+get_idf                  # or: export IDF_PATH=... — ./dev auto-activates from $IDF_PATH
 ./dev build && ./dev flash
-./dev monitor          # Ctrl-] to exit
+./dev monitor            # Ctrl-] to exit
 ```
 
-After flashing, configure Wi-Fi and MQTT broker on the device, then continue to [Home Assistant Setup](#home-assistant-setup). Both can also be set from the serial console — see [Console Commands](#console-commands).
+After flashing, configure Wi-Fi and the MQTT broker on the device (Settings modal) or via the [serial console](#console-commands).
 
 ---
 
@@ -62,83 +57,39 @@ The SenseCAP Indicator is a dual-MCU device:
 
 | MCU | Role | Key resources |
 |-----|------|---------------|
-| **ESP32-S3** | Display, touch, Wi-Fi, MQTT, Home Assistant logic | 8 MB flash, PSRAM @ 120 MHz OCT mode, 240 MHz CPU |
-| **RP2040** | Sensor acquisition on Grove ports | Reads CO₂, tVOC, temperature, humidity; relays to ESP32-S3 over UART |
+| **ESP32-S3** | Display, touch, Wi-Fi, MQTT, NVS, all business logic | 8 MB flash, PSRAM @ 120 MHz OCT, 240 MHz CPU |
+| **RP2040** | Sensor coprocessor | Reads the SEN54 over I2C, streams readings to the ESP32-S3 over a COBS-framed UART link |
 
-The two chips communicate over a COBS-framed UART link. All Grove sensor access goes through the RP2040; the ESP32-S3 never reads sensors directly.
+The ESP32-S3 **never** talks to Grove sensors directly.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                     ESP32-S3                         │
-│                                                      │
-│  ┌──────────┐   ESP event   ┌──────────┐            │
-│  │  Model   │◄─────loop────►│   View   │            │
-│  │ (state,  │               │ (LVGL,   │            │
-│  │  NVS,    │               │  touch   │            │
-│  │  MQTT)   │               │  input)  │            │
-│  └────┬─────┘               └──────────┘            │
-│       │ UART / COBS                                  │
-└───────┼─────────────────────────────────────────────┘
-        │
-┌───────┼─────────────────────────────────────────────┐
-│       ▼          RP2040                              │
-│  Packet dispatch                                     │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐    │
-│  │   SCD41    │  │   SGP40    │  │   SHT41    │    │
-│  │   (CO₂)    │  │   (tVOC)   │  │ (temp/hum) │    │
-│  └────────────┘  └────────────┘  └────────────┘    │
-└─────────────────────────────────────────────────────┘
-```
+On the ESP32-S3, each application domain is a vertical slice with a paired `*_model.c` (state, NVS, MQTT — no LVGL) and `*_view.c` (LVGL widgets, touch callbacks). Model and view never call each other directly; all cross-domain communication goes through the `view_event_handle` ESP event loop.
 
-### Model / View pattern
-
-Each application domain has a paired `*_model.c` and `*_view.c`:
-
-- **Model** — owns state, NVS reads/writes, MQTT publish/subscribe, RP2040 packet parsing
-- **View** — owns LVGL object updates, touch callbacks, screen transitions
-
-Model and view communicate exclusively through the **ESP event loop** with typed event IDs and payloads defined in `main/view_data.h`. Neither side calls the other's functions directly.
-
-SquareLine Studio-generated files in `main/ui/` are treated as assets. Custom logic goes in `*_view.c` files, not in the generated screens.
-
-For per-domain locations and architecture rules, see [`AGENTS.md`](AGENTS.md).
+**Developer Documentation:** Module layout, boot sequence, event-bus contract, LVGL thread-safety rules, build gotchas, and verification commands are documented in [`AGENTS.md`](AGENTS.md) and [`main/ARCHITECTURE.md`](main/ARCHITECTURE.md).
 
 ---
 
 ## MQTT Protocol
 
-Three fixed topics carry all communication:
+Topics follow `<topic_prefix>/<device_name>/<leaf>` (defaults: prefix `seeed`, device name MAC-derived `indicator-<mac4>`, also used as the MQTT client_id — one name everywhere):
 
-| Direction | Topic | Example payload |
-|-----------|-------|-----------------|
-| Device → HA (sensors) | `indicator/sensor` | `{"temp":"23.5","humidity":"45","co2":"450","tvoc":"100"}` |
-| HA → Device (commands) | `indicator/switch/set` | `{"switch1":1,"switch5":50}` |
-| Device → HA (state echo) | `indicator/switch/state` | `{"switch1":1,"switch2":0}` |
+```
+seeed/indicator-3f2a/data     — sensor data, JSON, every 5 s (held back until NTP-synced)
+seeed/indicator-3f2a/status   — retained "online" on connect; broker LWT publishes retained "offline"
+```
 
-**Sensor keys:** `temp`, `humidity`, `co2`, `tvoc`
+The data payload carries `seq`, `timestamp` (UTC epoch seconds), `device`, and 8 metrics: `sen5x/pm1_0`, `sen5x/pm2_5`, `sen5x/pm4_0`, `sen5x/pm10`, `sen5x/humidity`, `sen5x/temperature`, `sen5x/voc_index`, `sen5x/voc_alert`.
 
-**Control keys:**
+The legacy three-topic Home Assistant switch protocol (`indicator/sensor`, `indicator/switch/set`, `indicator/switch/state`) is still active in parallel. Payload keys and the full spec are covered by `scripts/test_sen5x_mqtt_protocol.py` / `scripts/test_ha_switch_protocol.py` and the root `AGENTS.md`.
 
-| Key | HA entity type | Range |
-|-----|---------------|-------|
-| `switch1`–`switch4`, `switch6`–`switch7` | Binary switch | `0` / `1` |
-| `switch5`, `switch8` | Numeric slider | integer value |
+**MQTT topics and payload compatibility are product behavior — do not change them without explicit instruction.**
 
 ---
 
-## Home Assistant Setup
+## Configuration
 
-1. **Install an MQTT broker** (Mosquitto is the simplest) and enable the MQTT integration in Home Assistant.
+Wi-Fi credentials, MQTT broker (address, credentials, topic prefix, device name), brightness and sleep mode are all configurable on-device via the touchscreen Settings modal, and persist in NVS. Broker settings can also be changed over serial — see below.
 
-2. **Point the Indicator at the broker** — from the device's MQTT screen, or via [`setmqtt`](#console-commands) over serial.
-
-3. **Add MQTT entities.** Append [`examples/homeassistant/mqtt-entities.yaml`](examples/homeassistant/mqtt-entities.yaml) to your `configuration.yaml` under the `mqtt:` key, then reload MQTT.
-
-4. **Add the dashboard.** Paste [`examples/homeassistant/dashboard.yaml`](examples/homeassistant/dashboard.yaml) into the Lovelace Raw Configuration Editor.
-
-<img src="./assets/Home Assistant Dashboard.png" />
-
-See also: [Seeed wiki — Home Assistant application guide](https://wiki.seeedstudio.com/SenseCAP_Indicator_Application_Home_Assistant/).
+To regenerate `sdkconfig` from defaults: delete it and run `./dev build`.
 
 ---
 
@@ -146,82 +97,50 @@ See also: [Seeed wiki — Home Assistant application guide](https://wiki.seeedst
 
 ### ESP32-S3 (main firmware)
 
-**Prerequisites:** ESP-IDF v5.4.x with `IDF_PATH` exported.
-
 ```bash
-./dev build          # idf.py build
-./dev flash          # auto-detects port
-./dev monitor        # Ctrl-] to exit
-./dev fullclean      # reset build directory
+./dev build            # clean + build (wipes build/ by default)
+./dev build --no-clean # incremental build
+./dev flash            # auto-detects port (-p PORT, -b BAUD, default 460800)
+./dev monitor          # Ctrl-] to exit
+./dev fullclean        # idf.py fullclean
+./dev test             # Python guards + ESP-IDF host unit tests
 ```
 
-Manual `idf.py` works the same way:
-
-```bash
-. "$IDF_PATH/export.sh"
-idf.py build
-idf.py -p /dev/ttyUSB0 -b 460800 flash monitor
-```
-
-**Critical `sdkconfig.defaults` settings — do not remove:**
-
-- `CONFIG_LV_MEM_CUSTOM=y` — required; removing causes LVGL to freeze
-- PSRAM clock: 120 MHz OCT mode
-- CPU: 240 MHz, flash: QIO 120 MHz
-
-App partition is 7 MB (`partitions.csv`); total flash is 8 MB.
+Manual `idf.py` works the same way after `. "$IDF_PATH/export.sh"`.
 
 ### RP2040 (sensor coprocessor)
 
-Only needed when changing sensor protocols. Current version is **v2.1.0**. Built with PlatformIO (Arduino core by Earle Philhower).
+Only needs rebuilding when `rp2040/` changes. Built with PlatformIO (Arduino core by Earle Philhower):
 
 ```bash
 ./dev rp2040 build
-./dev rp2040 upload      # device must appear as /dev/cu.usbmodem*
-./dev rp2040 monitor
+./dev rp2040 upload    # autodetects the RP2040 by USB VID:PID
+./dev rp2040 monitor   # 115200 baud
 ```
+
+**Critical `sdkconfig.defaults` settings — do not remove:** `CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=256` (load-bearing for the PSRAM overflow pool in `main/ui/ui_mem_pool.c`), PSRAM 120 MHz OCT mode, CPU 240 MHz, flash QIO 120 MHz. App partition is 7 MB of 8 MB flash (`partitions.csv`).
 
 ---
 
 ## Console Commands
 
-Connect at the device's baud rate and use these commands:
-
 | Command | Description |
 |---------|-------------|
 | `mqtthelp` | Print broker, topic, and payload examples |
 | `haconfig` | Print the current MQTT/HA configuration |
-| `setmqtt -a <addr>` | Set broker address (e.g., `mqtt://192.168.1.10:1883`) |
-| `setmqtt -a <addr> -c <client-id> -u <user> -p <pass>` | Full broker configuration |
-
-**Examples:**
-
-```text
-setmqtt -a 192.168.1.10 -c indicator-01 -u mqtt_user -p mqtt_password
-setmqtt --addr mqtt://192.168.1.10:1883
-setmqtt --addr mqtt://broker.emqx.io
-```
+| `setmqtt -a <addr>` | Set broker address (e.g. `mqtt://192.168.1.10:1883`) |
+| `setmqtt -n <name>` / `-t <prefix>` | Set device name / topic prefix |
+| `setmqtt -a <addr> -u <user> -p <pass>` | Full broker configuration |
 
 After `setmqtt` succeeds, the configuration is saved to NVS and the MQTT client restarts automatically.
 
 ---
 
-## Configuration
-
-Run `idf.py menuconfig` to explore options. Notable locations:
-
-- **LVGL fonts** — `Component config → LVGL configuration → Font usage`
-- **PSRAM clock** — `Components → ESP PSRAM → SPI RAM config` (requires "Make experimental features visible")
-
-To regenerate `sdkconfig` from defaults: delete it and run `./dev build`.
-
----
-
 ## Development
 
-**Code completion.** Install [clangd](https://github.com/clangd/clangd/releases) and the [clangd VS Code extension](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd). After one successful build, `build/compile_commands.json` is generated and clangd uses it automatically for ESP-IDF-aware navigation.
+**Code completion.** Install [clangd](https://github.com/clangd/clangd/releases) and the [clangd VS Code extension](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd). After one successful build, `build/compile_commands.json` is generated and clangd uses it automatically.
 
-**Architecture rules.** See [`AGENTS.md`](AGENTS.md) for module locations, boot sequence, and the model/view boundary rules that contributors (human and AI) must follow.
+**Rules and verification.** See [`AGENTS.md`](AGENTS.md) for the model/view boundary, event-post discipline, build gotchas and the check suite (`./dev test`, `scripts/dev_check.py`) that must pass after any change.
 
 ---
 
@@ -230,8 +149,7 @@ To regenerate `sdkconfig` from defaults: delete it and run `./dev build`.
 | Component | Version |
 |-----------|---------|
 | Firmware (ESP32-S3) | `v1.1.0` |
-| Coprocessor (RP2040) | `v2.1.0` |
-| ESP-IDF | `v5.4.x` |
+| ESP-IDF | `v5.5.x` (verified with 5.5.4) |
 | LVGL | `v9.x` (managed component) |
 | RP2040 build system | PlatformIO |
 
@@ -240,7 +158,7 @@ To regenerate `sdkconfig` from defaults: delete it and run `./dev build`.
 
 | Version | Notes |
 |---------|-------|
-| `v1.1.0` | Upgraded to ESP-IDF 5.4.x and LVGL 9; added `mqtthelp` console command; improved MQTT setup UX; unified build/flash tooling into `./dev` |
-| `v1.0.0` | Initial release (ESP-IDF 5.1 era, LVGL 8) |
+| `v1.1.0` | SEN54 air-quality focus; single-tile dashboard with modal settings; configurable MQTT topics + LWT status; LVGL 9; unified build/flash tooling into `./dev` |
+| `v1.0.0` | Initial release (ESP-IDF 5.1 era, LVGL 8, HA switch panel) |
 
 </details>

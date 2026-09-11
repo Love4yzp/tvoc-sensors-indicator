@@ -38,8 +38,8 @@ The monitor speed is `115200`.
 
 PlatformIO installs the RP2040 sensor dependencies declared in `platformio.ini`:
 
-- `PacketSerial`
-- `AHT20`
-- `Sensirion I2C SCD4x`
-- `Sensirion I2C SGP40`
-- `Sensirion Gas Index Algorithm`
+- `PacketSerial` (COBS framing)
+- `Sensirion I2C SEN5X` (SEN54 driver)
+
+Legacy sensor deps (AHT20, SCD4x, SGP40, Gas Index Algorithm) are kept commented
+out in `platformio.ini`; re-enable them together with `-DLEGACY_SENSORS`.

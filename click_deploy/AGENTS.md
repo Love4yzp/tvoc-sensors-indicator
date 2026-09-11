@@ -1,4 +1,4 @@
-# click_deploy — Agent Guide
+# click_deploy Packaging Guide
 
 This folder is the packaging scaffold for the no-toolchain flashing bundle of
 the SenseCAP Indicator firmware (ESP32-S3 screen side + RP2040 sensor

@@ -14,7 +14,7 @@ each feature slice owns its full stack (data model + MQTT protocol + UI componen
 | `ha_config.c` | ~154 | Broker NVS config (`ha_cfg_get`/`ha_cfg_set`) + IP address modal view. |
 | `ha_sensor.c` | ~128 | Sensor entity metadata, subscribes to sensor MQTT topics, publishes built-in sensor readings, routes incoming sensor JSON to `VIEW_EVENT_HA_SENSOR`. |
 | `ha_switch.c` | ~237 | Switch entity metadata, NVS state persistence, MQTT publish/subscribe, posts `VIEW_EVENT_HA_SWITCH_SET`. Holds `ha_switch_screen_t *` — does NOT touch LVGL directly. |
-| `ha_switch_screen.c` | ~500 | Builds HA switch widgets on nav tiles. Owns widget handles for all 8 switch widgets. Dispatch table maps index → widget + updater function. |
+| `ha_switch_screen.c` | ~500 | Builds HA switch widgets on the nav tile. Owns widget handles for all 8 switch widgets. Dispatch table maps index → widget + updater function. |
 | `ha_switch_screen.h` | 18 | `create` / `update` / `destroy` interface. |
 
 ---
@@ -24,7 +24,8 @@ each feature slice owns its full stack (data model + MQTT protocol + UI componen
 ```
 indicator_ha_view_init()    (called from indicator_view.c)
   ha_config_view_init()     register VIEW_EVENT_MQTT_ADDR_CHANGED + VIEW_EVENT_HA_ADDR_DISPLAY
-  ha_switch_screen_create() builds switch widgets on NAV_TILE_HA_CTRL and NAV_TILE_HA_MIX
+  ha_switch_screen_create() builds switch widgets on the dashboard tile
+                            (NAV_TILE_HA_CTRL / NAV_TILE_HA_MIX are legacy aliases for NAV_TILE_SEN5X — the UI is single-tile now)
   ha_switch_attach_screen() gives ha_switch.c the screen handle
 
 indicator_ha_model_init()   (called later from indicator_model.c)
