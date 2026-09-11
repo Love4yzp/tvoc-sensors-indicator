@@ -22,14 +22,7 @@ extern esp_event_loop_handle_t mqtt_app_event_handle;
 enum MQTT_APP_EVENT {
     MQTT_APP_START,
     MQTT_APP_RESTART,
-    MQTT_APP_STOP,
-    MQTT_APP_ALL,
 };
-
-typedef struct {
-    char topic[64];
-    char data[256];
-} mqtt_data_t;
 
 typedef struct instance_mqtt instance_mqtt;
 typedef void (*MQTTStartFn)(instance_mqtt *instance);
@@ -46,6 +39,5 @@ typedef instance_mqtt *instance_mqtt_t;
 
 void log_error_if_nonzero(const char *message, int error_code);
 int  indicator_mqtt_init(void);
-bool get_mqtt_net_flag(void);
 
 #endif /* MQTT_H */

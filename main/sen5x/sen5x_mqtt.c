@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_sntp.h"
 #include "esp_timer.h"
 
 #include "ha_config.h"
@@ -50,12 +51,13 @@ static int _voc_alert(float voc_index)
 
 /* ── Payload builders ────────────────────────────────────────────────────── */
 
-/* Wall-clock is "synced" once it is past 2001-09-09, i.e. NTP has set it.
- * Before that, time(NULL) returns seconds-since-boot, which is not a valid
- * Unix epoch and must never be serialized as a data timestamp. */
+/* Wall-clock is "synced" once SNTP reports a completed sync (wifi_model.c
+ * starts SNTP on first IP). Before that, time(NULL) returns seconds-since-boot,
+ * which is not a valid Unix epoch and must never be serialized as a data
+ * timestamp. */
 static bool _clock_synced(void)
 {
-    return time(NULL) > 1000000000L;
+    return esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
 }
 
 static uint64_t _timestamp_s(void)

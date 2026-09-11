@@ -8,13 +8,12 @@
 #include "sen5x_mqtt.h"
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_sntp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "ha-model";
 
-ESP_EVENT_DEFINE_BASE(HA_CFG_EVENT_BASE);
-esp_event_loop_handle_t ha_cfg_event_handle;
 instance_mqtt mqtt_ha_instance;
 static instance_mqtt_t instance_ptr = &mqtt_ha_instance;
 
@@ -88,52 +87,34 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-static void handle_wifi_status_change(const struct view_data_wifi_st *wifi_status)
+void ha_mqtt_request_restart(void)
 {
-    /* has_ip (LAN up), not is_network (internet): broker is usually local. */
-    ESP_LOGI(TAG, "WiFi status changed. has_ip: %d", wifi_status->has_ip);
-    if (wifi_status->has_ip && instance_ptr->is_using) {
-        esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE, MQTT_APP_START, &instance_ptr, sizeof(instance_mqtt_t), portMAX_DELAY);
-    } else {
-        /* TODO: Implement MQTT shutdown logic if needed */
-    }
-}
-
-static void view_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
-{
-    if (id == VIEW_EVENT_WIFI_ST) {
-        ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_ST");
-        handle_wifi_status_change((struct view_data_wifi_st *)event_data);
-    }
-}
-
-static void _cfg_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
-{
-    switch (id) {
-        case HA_CFG_BROKER_CHANGED:
-            ESP_LOGI(TAG, "event: HA_CFG_BROKER_CHANGED: %s",
-                     event_data ? (const char *)event_data : "?");
-            /* fall through */
-        case HA_CFG_SET:
-            /* Restart through the MQTT app loop: it recreates the client from
-             * the NVS config via _mqtt_ha_start(), which is NULL-safe and also
-             * picks up credential changes. Calling esp_mqtt_client_set_uri()
-             * here directly crashes when the client was never created (e.g. no
-             * network at confirm time) and silently ignores new credentials. */
-            esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE, MQTT_APP_RESTART, &instance_ptr, sizeof(instance_mqtt_t), portMAX_DELAY);
-            break;
-        default:
-            break;
+    /* Restart through the MQTT app loop: it recreates the client from the NVS
+     * config via _mqtt_ha_start(), which is NULL-safe and also picks up
+     * credential changes. Calling esp_mqtt_client_set_uri() directly crashes
+     * when the client was never created (e.g. no network at confirm time) and
+     * silently ignores new credentials. Non-blocking: producers may run on the
+     * LVGL task or the view_event loop, where a portMAX_DELAY post on a full
+     * queue freezes the UI. */
+    esp_err_t err = esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE,
+                                      MQTT_APP_RESTART, &instance_ptr,
+                                      sizeof(instance_mqtt_t), 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "MQTT_APP_RESTART post failed: %s", esp_err_to_name(err));
     }
 }
 
 static void _mqtt_ha_start(instance_mqtt *instance)
 {
-    if (!get_mqtt_net_flag()) {
-        return;
-    }
-
+    /* No network gating: esp-mqtt's built-in auto-reconnect (see
+     * reconnect_timeout_ms below) is the single reconnection mechanism, so
+     * the client is created even with the link down and keeps retrying until
+     * the broker is reachable. */
     if (instance->mqtt_client != NULL) {
+        /* esp-mqtt's stop path does not dispatch MQTT_EVENT_DISCONNECTED, so
+         * sen5x would keep its stale s_client and run its 5 s publish timer
+         * against a freed client — clear it BEFORE the client is destroyed. */
+        sen5x_mqtt_on_disconnect();
         esp_mqtt_client_stop(instance->mqtt_client);
         esp_mqtt_client_destroy(instance->mqtt_client);
         instance->mqtt_client = NULL;
@@ -148,6 +129,21 @@ static void _mqtt_ha_start(instance_mqtt *instance)
     if (ha_cfg_get(&hf_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get HA configuration");
         return;
+    }
+
+    /* Re-apply the configured NTP server (Settings → MQTT screen / setmqtt -s)
+     * on every (re)start, replacing the old HA_CFG event hook. SNTP itself is
+     * started by wifi_model at first GOT_IP; here we only touch an already
+     * running SNTP so a config change takes effect without starting SNTP
+     * before the link is up. */
+    if (esp_sntp_enabled()) {
+        const char *ntp_server = hf_cfg.ntp_server[0] != '\0' ? hf_cfg.ntp_server
+                                                              : CONFIG_NTP_SERVER;
+        esp_sntp_stop();
+        esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, ntp_server);
+        esp_sntp_init();
+        ESP_LOGI(TAG, "SNTP server re-applied: %s", ntp_server);
     }
 
     /* Topics live in static storage: hf_cfg is a stack local and the LWT topic
@@ -165,6 +161,10 @@ static void _mqtt_ha_start(instance_mqtt *instance)
         .credentials.client_id = hf_cfg.client_id,
         .credentials.username = hf_cfg.username,
         .credentials.authentication.password = hf_cfg.password,
+        /* Auto-reconnect is the ONLY reconnection mechanism (no WiFi-event
+         * driven restart anywhere). Set the backoff explicitly so the retry
+         * cadence does not depend on esp-mqtt defaults. */
+        .network.reconnect_timeout_ms = 10000,
         /* Broker publishes retained "offline" if the device drops
          * unexpectedly; on connect sen5x_mqtt publishes retained "online" to
          * the same status topic. */
@@ -202,16 +202,6 @@ int indicator_ha_model_init(void)
     sen5x_mqtt_init();
     /* LEGACY_HA: ha_sensor_init(); ha_switch_init(); */
 
-    esp_event_loop_args_t ha_event_task_args = {
-        .queue_size = 5,
-        .task_name = "ha_event_task",
-        .task_priority = uxTaskPriorityGet(NULL),
-        .task_stack_size = 4096,
-        .task_core_id = tskNO_AFFINITY,
-    };
-
-    ESP_ERROR_CHECK(esp_event_loop_create(&ha_event_task_args, &ha_cfg_event_handle));
-
     ESP_LOGI(TAG, "mqtt_ha_init");
 
     mqtt_ha_instance = (instance_mqtt){
@@ -224,8 +214,15 @@ int indicator_ha_model_init(void)
         .is_using = true,
     };
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(ha_cfg_event_handle, HA_CFG_EVENT_BASE, ESP_EVENT_ANY_ID, _cfg_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, view_event_handler, NULL, NULL));
+    /* Kick the initial start through the MQTT app loop so the client is
+     * created on the mqtt_event_task, same execution context as later
+     * restarts. No WiFi gating: auto-reconnect handles the link being down. */
+    esp_err_t err = esp_event_post_to(mqtt_app_event_handle, MQTT_APP_EVENT_BASE,
+                                      MQTT_APP_START, &instance_ptr,
+                                      sizeof(instance_mqtt_t), 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "initial MQTT_APP_START post failed: %s", esp_err_to_name(err));
+    }
     esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_HA_ADDR_DISPLAY, NULL, 0, portMAX_DELAY);
     return ESP_OK;
 }

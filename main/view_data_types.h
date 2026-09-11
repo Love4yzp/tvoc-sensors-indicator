@@ -170,8 +170,8 @@ struct view_data_ha_switch_data {
  *   Payload — data type posted with the event (NULL = no data)
  *   LVGL    — "lock required" = consumer must hold lv_port semaphore
  *
- * Bus: view_event_handle (main.c). Other buses: mqtt_app_event_handle,
- * ha_cfg_event_handle, cmd_cfg_event_handle.
+ * Bus: view_event_handle (main.c). Other bus: mqtt_app_event_handle
+ * (MQTT client lifecycle commands).
  */
 enum {
     /* P: wifi/wifi_model.c  C: wifi/wifi_view.c  Payload: uint8_t (enum start_screen) */
@@ -180,7 +180,7 @@ enum {
     /* P: display/display_model.c  C: display/display_view.c  Payload: bool */
     VIEW_EVENT_TIME,
 
-    /* P: wifi/wifi_model.c  C: mqtt/mqtt.c, wifi/wifi_view.c, ha/ha_mqtt.c */
+    /* P: wifi/wifi_model.c  C: wifi/wifi_view.c  Payload: struct view_data_wifi_st */
     VIEW_EVENT_WIFI_ST,             /* struct view_data_wifi_st */
 
     /* P/C: TODO  Payload: char city[32] */

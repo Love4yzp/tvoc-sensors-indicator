@@ -21,15 +21,12 @@ void mqtt_topics_build(const ha_cfg_interface *cfg,
                        char *data, size_t data_sz,
                        char *status, size_t status_sz);
 
-ESP_EVENT_DECLARE_BASE(HA_CFG_EVENT_BASE);
-extern esp_event_loop_handle_t ha_cfg_event_handle;
-extern instance_mqtt           mqtt_ha_instance;
+extern instance_mqtt mqtt_ha_instance;
 
-enum HA_CFG_EVENT {
-    HA_CFG_SET,
-    HA_CFG_BROKER_CHANGED,
-    HA_CFG_EVENT_ALL,
-};
+/* Request an MQTT client restart through the mqtt_app loop (e.g. after the
+ * broker config changed). Safe to call from the LVGL task or any event loop —
+ * the post is non-blocking and a full queue only logs a warning. */
+void ha_mqtt_request_restart(void);
 
 int indicator_ha_model_init(void);
 int indicator_ha_view_init(void);

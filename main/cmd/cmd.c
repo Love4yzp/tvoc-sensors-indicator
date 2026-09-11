@@ -16,9 +16,6 @@ static const char *TAG = "CMD_RESP";
 
 #define PROMPT_STR "Indicator"
 
-ESP_EVENT_DEFINE_BASE(CMD_CFG_EVENT_BASE);
-esp_event_loop_handle_t cmd_cfg_event_handle;
-
 static ha_cfg_interface ha_cfg;
 
 static void print_mqtt_usage(void) {
@@ -198,7 +195,7 @@ static int mqtt_config_set(int argc, char **argv) {
         ESP_LOGE(TAG, "Failed to save MQTT configuration");
         return 1;
     }
-    esp_event_post_to(ha_cfg_event_handle, HA_CFG_EVENT_BASE, HA_CFG_SET, NULL, 0, portMAX_DELAY);
+    ha_mqtt_request_restart();
     ESP_LOGI(TAG, "MQTT configuration saved. Reconnecting MQTT client.");
     return 0;
 }
@@ -233,15 +230,6 @@ int indicator_cmd_init(void) {
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt                    = PROMPT_STR ">";
     repl_config.max_cmdline_length        = 1024;
-
-    esp_event_loop_args_t cmd_event_task_args = {
-        .queue_size      = 2,
-        .task_name       = "cmd_event_task",
-        .task_priority   = uxTaskPriorityGet(NULL),
-        .task_stack_size = 4096,
-        .task_core_id    = tskNO_AFFINITY,
-    };
-    ESP_ERROR_CHECK(esp_event_loop_create(&cmd_event_task_args, &cmd_cfg_event_handle));
 
     ha_cfg_get(&ha_cfg);
     register_read_config();
