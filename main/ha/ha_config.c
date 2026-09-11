@@ -350,8 +350,7 @@ static void handle_mqtt_config_save(void)
     _refresh_topic_preview();
 
     /* Notify MQTT module to restart with new config */
-    esp_event_post_to(ha_cfg_event_handle, HA_CFG_EVENT_BASE, HA_CFG_BROKER_CHANGED,
-                      ha_cfg.broker_url, sizeof(ha_cfg.broker_url), portMAX_DELAY);
+    ha_mqtt_request_restart();
 
     show_message_box("MQTT config saved", lv_palette_main(LV_PALETTE_GREEN));
 }

@@ -6,7 +6,7 @@ Vertical slice for all WiFi functionality. Mirrors the pattern established by `m
 
 | File | Owns | LVGL |
 |---|---|---|
-| `wifi_model.c` | ESP WiFi event handling, state machine, ping network check, 5-min reconnect task | ✗ |
+| `wifi_model.c` | ESP WiFi event handling, reconnect state machine, ping network check, 5 s monitor task | ✗ |
 | `wifi_list_screen.c` | AP list widget lifecycle, item creation, show/hide spinner | ✓ |
 | `wifi_connect_screen.c` | Connect dialog and AP-details dialog (modal overlays) | ✓ |
 | `wifi_view.c` | Event subscriptions, status icon updates, screen navigation, component coordination | ✓ |
@@ -51,6 +51,39 @@ VIEW_EVENT_WIFI_CONNECT_RET
 VIEW_EVENT_WIFI_LIST (scan result)
   → wifi_view: wifi_list_screen_update()
 ```
+
+## Reconnect State Machine
+
+Single mechanism, split across the WiFi event handler (fast path) and
+`_indicator_wifi_task` (slow path). There is no second driver-restart layer
+and `wifi_sta_config_t.failure_retry_cnt` is intentionally unused: the
+"retrying" state must be broadcast to the UI, and `failure_retry_cnt`
+suppresses the intermediate DISCONNECTED events that make that possible
+(the UI would keep showing a stale "connected").
+
+```
+WIFI_EVENT_STA_DISCONNECTED (wifi_model.c)
+  ├─ _g_shutting_down or !is_cfg → state=disconnected, broadcast, no retry
+  ├─ retry_num < retry_max (3)   → retry_num++, state={connected=false,
+  │                                 network=false, connecting=true},
+  │                                 broadcast VIEW_EVENT_WIFI_ST, esp_wifi_connect()
+  └─ budget spent                → state=disconnected, broadcast,
+                                   VIEW_EVENT_WIFI_CONNECT_RET(failure)
+
+_indicator_wifi_task (5 s tick)
+  └─ is_cfg && !connected && !connecting for > 5 ticks (~30 s)
+       → re-arm retry_num=0, state=connecting, broadcast, esp_wifi_connect()
+```
+
+- Every state transition updates `_g_wifi_model.st` AND broadcasts
+  `VIEW_EVENT_WIFI_ST` — no stale "connected" while retrying.
+- `is_cfg` / `retry_num` / `retry_max` / `idle_ticks` all live in
+  `_g_wifi_model` under `_g_data_mutex` (same critical section as `st`).
+- `_g_shutting_down` (atomic, one-way) is latched by `_wifi_shutdown()` so
+  the DISCONNECTED from the shutdown `esp_wifi_stop()` is not retried; the
+  blocking `esp_wifi_stop()` itself runs on `_wifi_cmd_task`
+  (`WIFI_CMD_SHUTDOWN`), never on the view_event loop.
+- `IP_EVENT_STA_GOT_IP` re-arms the burst budget (`retry_num = idle_ticks = 0`).
 
 ## LVGL Thread Safety
 

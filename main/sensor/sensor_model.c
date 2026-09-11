@@ -88,11 +88,19 @@ static int init_sensor_data(SensorData* sensor, enum sensor_data_type type) {
 }
 
 int get_sensor_int_value(const enum sensor_data_type type) {
-	return (int)allSensorData[type].value;
+	int value;
+	xSemaphoreTake(_g_sensors_data_mutex, portMAX_DELAY);
+	value = (int)allSensorData[type].value;
+	xSemaphoreGive(_g_sensors_data_mutex);
+	return value;
 }
 
 float get_sensor_float_value(const enum sensor_data_type type) {
-	return allSensorData[type].value;
+	float value;
+	xSemaphoreTake(_g_sensors_data_mutex, portMAX_DELAY);
+	value = allSensorData[type].value;
+	xSemaphoreGive(_g_sensors_data_mutex);
+	return value;
 }
 
 #define X(type, str) \

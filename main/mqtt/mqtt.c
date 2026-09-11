@@ -7,31 +7,16 @@ static const char *TAG = "INDICATOR_MQTT";
 ESP_EVENT_DEFINE_BASE(MQTT_APP_EVENT_BASE);
 esp_event_loop_handle_t mqtt_app_event_handle;
 
-bool mqtt_net_flag = false;
-
-bool get_mqtt_net_flag(void) {
-    return mqtt_net_flag;
-}
-
-static void _wifi_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
-    switch (id) {
-        case VIEW_EVENT_WIFI_ST: {
-            struct view_data_wifi_st *p_st = (struct view_data_wifi_st *)event_data;
-            mqtt_net_flag = p_st->is_network;
-            ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_ST is_network:%d\tmqtt_net_flag:%d",
-                     p_st->is_network, mqtt_net_flag);
-            break;
-        }
-        case WIFI_EVENT_STA_DISCONNECTED:
-            mqtt_net_flag = false;
-            break;
-    }
-}
+/* Reconnection is owned exclusively by esp-mqtt's built-in auto-reconnect
+ * (configured in ha_mqtt.c with an explicit reconnect_timeout_ms). There is
+ * deliberately NO WiFi-status gating here: the client starts once at boot and
+ * keeps retrying through link outages on its own, so a parallel "start on
+ * WiFi up" path would just be a second, conflicting mechanism. This loop now
+ * only handles lifecycle commands: initial start and config-change restart. */
 
 static void mqtt_start_interface(const instance_mqtt *instance, enum MQTT_APP_EVENT flag) {
-    if (!mqtt_net_flag || !instance || !instance->mqtt_name || !instance->mqtt_starter) {
-        ESP_LOGE(TAG, "Cannot start MQTT: %s",
-                 !mqtt_net_flag ? "No network" : "Invalid instance");
+    if (!instance || !instance->mqtt_name || !instance->mqtt_starter) {
+        ESP_LOGE(TAG, "Cannot start MQTT: invalid instance");
         return;
     }
 
@@ -56,16 +41,8 @@ static void _app_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch (id) {
         case MQTT_APP_START:
         case MQTT_APP_RESTART:
-            if (mqtt_net_flag && instance->is_using)
+            if (instance->is_using)
                 mqtt_start_interface(instance, id);
-            break;
-        case MQTT_APP_STOP:
-            if (instance->mqtt_connected_flag && instance->mqtt_client) {
-                esp_mqtt_client_stop(instance->mqtt_client);
-                esp_mqtt_client_destroy(instance->mqtt_client);
-                instance->mqtt_client = NULL;
-                instance->mqtt_connected_flag = false;
-            }
             break;
         default:
             ESP_LOGW(TAG, "Unknown MQTT app event: %ld", id);
@@ -83,12 +60,6 @@ int indicator_mqtt_init(void) {
     };
     ESP_ERROR_CHECK(esp_event_loop_create(&mqtt_event_task_args, &mqtt_app_event_handle));
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
-        view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST,
-        _wifi_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
-        view_event_handle, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-        _wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
         mqtt_app_event_handle, MQTT_APP_EVENT_BASE, ESP_EVENT_ANY_ID,
         _app_event_handler, NULL, NULL));
