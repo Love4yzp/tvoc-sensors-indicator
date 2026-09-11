@@ -29,6 +29,11 @@ extern "C" {
 /* Default MQTT topic prefix: topics are "<prefix>/<device_name>/{data,status}". */
 #define CONFIG_MQTT_TOPIC_PREFIX "seeed"
 
+/* Default NTP server. Data publishes are gated on clock sync, so on isolated
+ * LANs (no internet) point this at a LAN time source via the Settings screen
+ * or "setmqtt -s". */
+#define CONFIG_NTP_SERVER        "pool.ntp.org"
+
 #define CONFIG_HA_SENSOR_ENTITY_NUM              6
 #define CONFIG_HA_SWITCH_ENTITY_NUM              8
 

@@ -54,7 +54,7 @@ MQTT broker sends switch command
   → ha_switch.c: ha_switch_screen_update() [LVGL lock]
 
 WiFi connects
-  → VIEW_EVENT_WIFI_ST {is_network=true}
+  → VIEW_EVENT_WIFI_ST {has_ip=true}   (LAN up — not gated on internet ping)
   → ha_mqtt.c: post MQTT_APP_START to mqtt_app_event_handle
   → mqtt/mqtt.c: calls mqtt_ha_instance.mqtt_starter()
   → ha_mqtt.c: _mqtt_ha_start() reads NVS config, creates MQTT client

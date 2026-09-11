@@ -1,6 +1,10 @@
 #include "wifi_model.h"
 #include "esp_log.h"
 
+#include "ha_config.h"
+#include "ha_mqtt.h"
+#include "home_assistant_config.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -84,6 +88,7 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 			struct view_data_wifi_st st;
 			st.is_connected = false;
 			st.is_network = false;
+			st.has_ip = false;
 			st.is_connecting = true;
 			memset(st.ssid, 0, sizeof(st.ssid));
 			st.rssi = 0;
@@ -104,6 +109,8 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 			st.rssi = -50; // todo
 			st.is_connected = true;
 			st.is_connecting = false;
+			/* No IP yet at this point — GOT_IP arrives later and sets has_ip. */
+			st.has_ip = false;
 			_wifi_st_set(&st);
 
 			esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st,
@@ -133,6 +140,7 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 				_wifi_st_get(&st);
 				st.is_connected = false;
 				st.is_network = false;
+				st.has_ip = false;
 				st.is_connecting = false;
 				_wifi_st_set(&st);
 
@@ -155,15 +163,47 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 /* Start SNTP once we first have an IP so the system clock syncs to real wall
  * time. _timestamp_s() (sen5x_mqtt.c) then reports true Unix epoch seconds
  * instead of seconds-since-boot. Payload timestamps are UTC epoch, so no
- * timezone setup is needed. Requires the network to reach the NTP server. */
-static void _sntp_start_once(void) {
-	static bool started = false;
-	if(started) return;
+ * timezone setup is needed. Requires the network to reach the NTP server.
+ *
+ * The server comes from the NVS config (Settings → MQTT screen, "NTP Server"
+ * field, or setmqtt -s) and defaults to CONFIG_NTP_SERVER — on isolated LANs
+ * pool.ntp.org is unreachable and data publishes stay NTP-gated forever, so
+ * the server must be pointable at a LAN time source. */
+static void _sntp_apply_server(void) {
+	char ntp_server[64];
+	ha_cfg_interface cfg;
+	if(ha_cfg_get(&cfg) == ESP_OK && cfg.ntp_server[0] != '\0')
+	{
+		strlcpy(ntp_server, cfg.ntp_server, sizeof(ntp_server));
+	}
+	else
+	{
+		strlcpy(ntp_server, CONFIG_NTP_SERVER, sizeof(ntp_server));
+	}
+
+	if(esp_sntp_enabled())
+	{
+		esp_sntp_stop();
+	}
 	esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-	esp_sntp_setservername(0, "pool.ntp.org");
+	esp_sntp_setservername(0, ntp_server);
 	esp_sntp_init();
-	started = true;
-	ESP_LOGI(TAG, "SNTP started (pool.ntp.org) — system time will sync shortly");
+	ESP_LOGI(TAG, "SNTP started (server: %s) — system time will sync shortly", ntp_server);
+}
+
+/* Re-apply the NTP server when the MQTT/NTP config changes at runtime
+ * (Settings screen or setmqtt console command). */
+static void _ha_cfg_event_handler(void* arg, esp_event_base_t base, int32_t id, void* event_data) {
+	if(id == HA_CFG_SET || id == HA_CFG_BROKER_CHANGED)
+	{
+		struct view_data_wifi_st st;
+		_wifi_st_get(&st);
+		if(st.has_ip)
+		{
+			ESP_LOGI(TAG, "config changed — restarting SNTP with updated NTP server");
+			_sntp_apply_server();
+		}
+	}
 }
 
 static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
@@ -173,7 +213,35 @@ static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
 		ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
 		s_retry_num = 0;
 
-		_sntp_start_once();
+		/* LAN is usable as soon as we have an IP: this (not the 1.1.1.1
+		 * internet ping) is what gates the MQTT client start. */
+		struct view_data_wifi_st st;
+		_wifi_st_get(&st);
+		st.has_ip = true;
+		_wifi_st_set(&st);
+		esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st,
+						  sizeof(struct view_data_wifi_st), portMAX_DELAY);
+
+		_sntp_apply_server();
+
+		/* Restart SNTP when the NTP server config changes at runtime (Settings
+		 * screen / setmqtt). Registered lazily here: indicator_wifi_model_init()
+		 * runs before indicator_ha_model_init() creates ha_cfg_event_handle, so
+		 * registering at init would abort on the NULL loop handle. */
+		static bool s_ha_cfg_hooked = false;
+		if(!s_ha_cfg_hooked)
+		{
+			s_ha_cfg_hooked = true;
+			esp_err_t err = esp_event_handler_instance_register_with(
+				ha_cfg_event_handle, HA_CFG_EVENT_BASE, ESP_EVENT_ANY_ID,
+				_ha_cfg_event_handler, NULL, NULL);
+			if(err != ESP_OK)
+			{
+				s_ha_cfg_hooked = false;
+				ESP_LOGW(TAG, "ha_cfg hook register failed: %s", esp_err_to_name(err));
+			}
+		}
+
 		xSemaphoreGive(_g_net_check_sem);
 	}
 }

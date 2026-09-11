@@ -17,9 +17,12 @@ static void _wifi_event_handler(void *handler_args, esp_event_base_t base, int32
     switch (id) {
         case VIEW_EVENT_WIFI_ST: {
             struct view_data_wifi_st *p_st = (struct view_data_wifi_st *)event_data;
-            mqtt_net_flag = p_st->is_network;
-            ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_ST is_network:%d\tmqtt_net_flag:%d",
-                     p_st->is_network, mqtt_net_flag);
+            /* Gate on has_ip (LAN up), not is_network (internet reachable):
+             * the broker is usually on the LAN, and gating on the 1.1.1.1
+             * ping kept MQTT permanently off on isolated networks. */
+            mqtt_net_flag = p_st->has_ip;
+            ESP_LOGI(TAG, "event: VIEW_EVENT_WIFI_ST has_ip:%d\tmqtt_net_flag:%d",
+                     p_st->has_ip, mqtt_net_flag);
             break;
         }
         case WIFI_EVENT_STA_DISCONNECTED:
