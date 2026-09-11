@@ -1,6 +1,5 @@
 #include "mqtt.h"
 #include "esp_log.h"
-#include "esp_wifi.h"
 
 static const char *TAG = "INDICATOR_MQTT";
 
@@ -11,8 +10,11 @@ esp_event_loop_handle_t mqtt_app_event_handle;
  * (configured in ha_mqtt.c with an explicit reconnect_timeout_ms). There is
  * deliberately NO WiFi-status gating here: the client starts once at boot and
  * keeps retrying through link outages on its own, so a parallel "start on
- * WiFi up" path would just be a second, conflicting mechanism. This loop now
- * only handles lifecycle commands: initial start and config-change restart. */
+ * WiFi up" path would just be a second, conflicting mechanism. This also
+ * covers isolated-LAN deployments (local broker, no internet): the client
+ * retries until the broker answers, no has_ip/is_network gate needed. This
+ * loop now only handles lifecycle commands: initial start and config-change
+ * restart. */
 
 static void mqtt_start_interface(const instance_mqtt *instance, enum MQTT_APP_EVENT flag) {
     if (!instance || !instance->mqtt_name || !instance->mqtt_starter) {

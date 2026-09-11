@@ -3,6 +3,9 @@
 
 #include <stdatomic.h>
 
+#include "ha_config.h"
+#include "home_assistant_config.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -87,6 +90,7 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 			struct view_data_wifi_st st;
 			st.is_connected = false;
 			st.is_network = false;
+			st.has_ip = false;
 			st.is_connecting = true;
 			memset(st.ssid, 0, sizeof(st.ssid));
 			st.rssi = 0;
@@ -107,6 +111,8 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 			st.rssi = -50; // todo
 			st.is_connected = true;
 			st.is_connecting = false;
+			/* No IP yet at this point — GOT_IP arrives later and sets has_ip. */
+			st.has_ip = false;
 			_wifi_st_set(&st);
 
 			esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st,
@@ -140,6 +146,7 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 			xSemaphoreTake(_g_data_mutex, portMAX_DELAY);
 			_g_wifi_model.st.is_connected = false;
 			_g_wifi_model.st.is_network = false;
+			_g_wifi_model.st.has_ip = false; /* link down ⇒ no lease */
 			if(_g_shutting_down || !_g_wifi_model.is_cfg)
 			{
 				_g_wifi_model.st.is_connecting = false;
@@ -190,15 +197,32 @@ static void _wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t 
 /* Start SNTP once we first have an IP so the system clock syncs to real wall
  * time. _timestamp_s() (sen5x_mqtt.c) then reports true Unix epoch seconds
  * instead of seconds-since-boot. Payload timestamps are UTC epoch, so no
- * timezone setup is needed. Requires the network to reach the NTP server. */
-static void _sntp_start_once(void) {
-	static bool started = false;
-	if(started) return;
+ * timezone setup is needed. Requires the network to reach the NTP server.
+ *
+ * The server comes from the NVS config (Settings → MQTT screen, "NTP Server"
+ * field, or setmqtt -s) and defaults to CONFIG_NTP_SERVER — on isolated LANs
+ * pool.ntp.org is unreachable and data publishes stay NTP-gated forever, so
+ * the server must be pointable at a LAN time source. */
+static void _sntp_apply_server(void) {
+	char ntp_server[64];
+	ha_cfg_interface cfg;
+	if(ha_cfg_get(&cfg) == ESP_OK && cfg.ntp_server[0] != '\0')
+	{
+		strlcpy(ntp_server, cfg.ntp_server, sizeof(ntp_server));
+	}
+	else
+	{
+		strlcpy(ntp_server, CONFIG_NTP_SERVER, sizeof(ntp_server));
+	}
+
+	if(esp_sntp_enabled())
+	{
+		esp_sntp_stop();
+	}
 	esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-	esp_sntp_setservername(0, "pool.ntp.org");
+	esp_sntp_setservername(0, ntp_server);
 	esp_sntp_init();
-	started = true;
-	ESP_LOGI(TAG, "SNTP started (pool.ntp.org) — system time will sync shortly");
+	ESP_LOGI(TAG, "SNTP started (server: %s) — system time will sync shortly", ntp_server);
 }
 
 static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
@@ -212,7 +236,20 @@ static void _ip_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
 		_g_wifi_model.idle_ticks = 0;
 		xSemaphoreGive(_g_data_mutex);
 
-		_sntp_start_once();
+		/* has_ip = LAN usable (DHCP lease held), as opposed to is_network
+		 * (internet reachable via ping). UI/status semantics; MQTT start is
+		 * deliberately NOT gated on it (esp-mqtt auto-reconnect owns
+		 * reconnection), which also keeps the client retrying on isolated
+		 * LANs where the 1.1.1.1 ping never succeeds. */
+		struct view_data_wifi_st st;
+		_wifi_st_get(&st);
+		st.has_ip = true;
+		_wifi_st_set(&st);
+		esp_event_post_to(view_event_handle, VIEW_EVENT_BASE, VIEW_EVENT_WIFI_ST, &st,
+						  sizeof(struct view_data_wifi_st), portMAX_DELAY);
+
+		_sntp_apply_server();
+
 		xSemaphoreGive(_g_net_check_sem);
 	}
 }

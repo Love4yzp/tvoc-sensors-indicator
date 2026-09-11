@@ -8,6 +8,7 @@
 #include "sen5x_mqtt.h"
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_sntp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -128,6 +129,21 @@ static void _mqtt_ha_start(instance_mqtt *instance)
     if (ha_cfg_get(&hf_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get HA configuration");
         return;
+    }
+
+    /* Re-apply the configured NTP server (Settings → MQTT screen / setmqtt -s)
+     * on every (re)start, replacing the old HA_CFG event hook. SNTP itself is
+     * started by wifi_model at first GOT_IP; here we only touch an already
+     * running SNTP so a config change takes effect without starting SNTP
+     * before the link is up. */
+    if (esp_sntp_enabled()) {
+        const char *ntp_server = hf_cfg.ntp_server[0] != '\0' ? hf_cfg.ntp_server
+                                                              : CONFIG_NTP_SERVER;
+        esp_sntp_stop();
+        esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, ntp_server);
+        esp_sntp_init();
+        ESP_LOGI(TAG, "SNTP server re-applied: %s", ntp_server);
     }
 
     /* Topics live in static storage: hf_cfg is a stack local and the LWT topic

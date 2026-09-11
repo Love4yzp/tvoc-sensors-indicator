@@ -25,7 +25,9 @@ static void print_mqtt_usage(void) {
     printf("  Set broker, device name, topic prefix and credentials:\n");
     printf("    setmqtt -a 192.168.1.10 -n lab-301 -t F01 -u mqtt_user -p mqtt_password\n");
     printf("    setmqtt --addr mqtt://192.168.1.10:1883\n");
-    printf("    setmqtt --addr mqtt://broker.emqx.io\n\n");
+    printf("    setmqtt --addr mqtt://broker.emqx.io\n");
+    printf("    setmqtt -s 192.168.1.1   # NTP server (data publishes are NTP-gated;\n");
+    printf("                             # isolated LANs need a local time source)\n\n");
     printf("  Notes:\n");
     printf("    - Device name: [A-Za-z0-9-_], max 31 chars; default is MAC-derived (indicator-<mac4>).\n");
     printf("      The MQTT client ID follows the device name (one name everywhere).\n");
@@ -70,6 +72,7 @@ static int read_ha_config(int argc, char **argv) {
     ESP_LOGI(TAG, "| MQTT password                | %-40s |", ha_cfg.password);
     ESP_LOGI(TAG, "| Data topic                   | %-40s |", data_topic);
     ESP_LOGI(TAG, "| Status topic                 | %-40s |", status_topic);
+    ESP_LOGI(TAG, "| NTP server                   | %-40s |", ha_cfg.ntp_server);
     ESP_LOGI(TAG, "Run 'mqtthelp' for setmqtt examples and MQTT topic/payload examples.");
     return 0;
 }
@@ -106,6 +109,7 @@ struct {
     struct arg_str *client_id;
     struct arg_str *device_name;
     struct arg_str *topic_prefix;
+    struct arg_str *ntp_server;
     struct arg_end *end;
 } mqtt_args;
 
@@ -119,7 +123,8 @@ static int mqtt_config_set(int argc, char **argv) {
 
     if (!mqtt_args.username->count && !mqtt_args.password->count &&
         !mqtt_args.broker_url->count && !mqtt_args.client_id->count &&
-        !mqtt_args.device_name->count && !mqtt_args.topic_prefix->count) {
+        !mqtt_args.device_name->count && !mqtt_args.topic_prefix->count &&
+        !mqtt_args.ntp_server->count) {
         print_mqtt_usage();
         return 0;
     }
@@ -175,6 +180,16 @@ static int mqtt_config_set(int argc, char **argv) {
         strncpy(ha_cfg.topic_prefix, prefix, sizeof(ha_cfg.topic_prefix) - 1);
         ESP_LOGI(TAG, "Set MQTT topic prefix: %s", ha_cfg.topic_prefix);
     }
+    if (mqtt_args.ntp_server->count > 0) {
+        const char *server = mqtt_args.ntp_server->sval[0];
+        if (!ha_cfg_validate_ntp_server(server)) {
+            ESP_LOGE(TAG, "Invalid NTP server: %s ([A-Za-z0-9.-], max 63 chars)", server);
+            return 1;
+        }
+        memset(ha_cfg.ntp_server, 0, sizeof(ha_cfg.ntp_server));
+        strncpy(ha_cfg.ntp_server, server, sizeof(ha_cfg.ntp_server) - 1);
+        ESP_LOGI(TAG, "Set NTP server: %s", ha_cfg.ntp_server);
+    }
 
     if (ha_cfg_set(&ha_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save MQTT configuration");
@@ -196,7 +211,9 @@ static void register_mqtt_config(void) {
                                       "Device name [A-Za-z0-9-_], max 31 chars (also sets the client ID)");
     mqtt_args.topic_prefix = arg_str0("t", "topic", "<prefix>",
                                       "MQTT topic prefix, no +/#/space, no leading/trailing /, max 63 chars");
-    mqtt_args.end          = arg_end(6);
+    mqtt_args.ntp_server   = arg_str0("s", "ntp", "<server>",
+                                      "NTP server hostname or IPv4, max 63 chars (data publishes are NTP-gated)");
+    mqtt_args.end          = arg_end(7);
 
     const esp_console_cmd_t cmd = {
         .command  = "setmqtt",

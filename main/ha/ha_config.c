@@ -17,9 +17,12 @@
 
 #define MAX_BROKER_URL_LEN 128
 
-/* NVS blobs written by firmware before device_name/topic_prefix existed hold
- * only the first four fields (128+32+32+64 = 256 bytes). */
+/* NVS blobs written by older firmware are shorter than the current struct:
+ * v1 blobs hold only the first four fields (128+32+32+64 = 256 bytes), v2
+ * blobs add device_name/topic_prefix but predate ntp_server. ha_cfg_get()
+ * tries each known size; the zeroed tail falls through to defaults. */
 #define HA_CFG_LEGACY_SIZE  offsetof(ha_cfg_interface, device_name)
+#define HA_CFG_V2_SIZE      offsetof(ha_cfg_interface, ntp_server)
 
 /* Keyboard is pinned to the bottom of the 480px-high modal; the form
  * container starts at y=90. When the keyboard is up, shrink the form so
@@ -39,6 +42,7 @@ static lv_obj_t *s_broker_device_name_textarea  = NULL;
 static lv_obj_t *s_broker_topic_prefix_textarea = NULL;
 static lv_obj_t *s_broker_username_textarea     = NULL;
 static lv_obj_t *s_broker_password_textarea     = NULL;
+static lv_obj_t *s_broker_ntp_server_textarea   = NULL;
 static lv_obj_t *s_broker_keyboard              = NULL;
 static lv_obj_t *s_form_container               = NULL;
 static lv_obj_t *s_identity_label               = NULL;
@@ -72,6 +76,22 @@ bool ha_cfg_validate_topic_prefix(const char *prefix)
     }
     for (const char *p = prefix; *p; p++) {
         if (*p == '+' || *p == '#' || *p == ' ') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ha_cfg_validate_ntp_server(const char *server)
+{
+    if (!server || server[0] == '\0' || strlen(server) > 63) {
+        return false;
+    }
+    /* Hostname or IPv4 literal — letters, digits, '.', '-' only. */
+    for (const char *p = server; *p; p++) {
+        char c = *p;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '-')) {
             return false;
         }
     }
@@ -267,6 +287,8 @@ static void handle_mqtt_config_save(void)
         lv_textarea_get_text(s_broker_username_textarea) : "";
     const char *new_password = s_broker_password_textarea ?
         lv_textarea_get_text(s_broker_password_textarea) : "";
+    const char *new_ntp_server = s_broker_ntp_server_textarea ?
+        lv_textarea_get_text(s_broker_ntp_server_textarea) : "";
 
     /* Validate broker IP */
     if (!is_valid_ipv4(new_ip)) {
@@ -338,14 +360,24 @@ static void handle_mqtt_config_save(void)
         return;
     }
 
+    /* Empty NTP server restores the default (ha_cfg_get fills it). */
+    if (new_ntp_server[0] != '\0' && !ha_cfg_validate_ntp_server(new_ntp_server)) {
+        ESP_LOGE(TAG, "Invalid NTP server: %s", new_ntp_server);
+        show_message_box("Invalid NTP server ([A-Za-z0-9.-], max 63 chars)",
+                         lv_palette_main(LV_PALETTE_RED));
+        return;
+    }
+    strlcpy(ha_cfg.ntp_server, new_ntp_server, sizeof(ha_cfg.ntp_server));
+
     if (ha_cfg_set(&ha_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save MQTT config");
         show_message_box("Failed to save", lv_palette_main(LV_PALETTE_RED));
         return;
     }
 
-    ESP_LOGI(TAG, "MQTT config saved: broker=%s, device=%s, prefix=%s, username=%s",
-             ha_cfg.broker_url, ha_cfg.device_name, ha_cfg.topic_prefix, ha_cfg.username);
+    ESP_LOGI(TAG, "MQTT config saved: broker=%s, device=%s, prefix=%s, username=%s, ntp=%s",
+             ha_cfg.broker_url, ha_cfg.device_name, ha_cfg.topic_prefix, ha_cfg.username,
+             ha_cfg.ntp_server);
 
     _refresh_topic_preview();
 
@@ -605,7 +637,32 @@ static void _ensure_broker_modal(void)
 
     y += ROW_HEIGHT;
 
-    /* ── 6. Live topic preview (read-only; updated on every keystroke) ────── */
+    /* ── 6. NTP Server (data publishes are NTP-gated; isolated LANs need a
+     *        local time source instead of the default pool.ntp.org) ─────── */
+    lv_obj_t *ntp_label = lv_label_create(s_form_container);
+    lv_label_set_text(ntp_label, "NTP Server");
+    lv_obj_set_style_text_color(ntp_label, lv_color_hex(0x9E9E9E),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ntp_label, &lv_font_montserrat_14,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_pos(ntp_label, 0, y + ROW_LABEL_Y);
+
+    s_broker_ntp_server_textarea = lv_textarea_create(s_form_container);
+    lv_obj_set_size(s_broker_ntp_server_textarea, 420, 40);
+    lv_obj_set_pos(s_broker_ntp_server_textarea, 0, y + ROW_INPUT_Y);
+    lv_textarea_set_max_length(s_broker_ntp_server_textarea, 63);
+    lv_textarea_set_placeholder_text(s_broker_ntp_server_textarea,
+                                     CONFIG_NTP_SERVER);
+    lv_textarea_set_one_line(s_broker_ntp_server_textarea, true);
+    _style_textarea(s_broker_ntp_server_textarea);
+    lv_obj_add_event_cb(s_broker_ntp_server_textarea, _on_textarea_focused,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_broker_ntp_server_textarea, _on_broker_keyboard_done,
+                        LV_EVENT_DEFOCUSED, NULL);
+
+    y += ROW_HEIGHT;
+
+    /* ── 7. Live topic preview (read-only; updated on every keystroke) ────── */
     s_preview_data_label = lv_label_create(s_form_container);
     lv_obj_set_style_text_color(s_preview_data_label, lv_color_hex(0x9E9E9E),
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -622,7 +679,7 @@ static void _ensure_broker_modal(void)
 
     y += 50;
 
-    /* ── 7. Confirm button ──────────────────────────────────────────────── */
+    /* ── 8. Confirm button ──────────────────────────────────────────────── */
     lv_obj_t *confirm = lv_button_create(s_form_container);
     lv_obj_set_size(confirm, 420, 50);
     lv_obj_set_pos(confirm, 0, y);
@@ -724,6 +781,10 @@ static void update_config_fields(const ha_cfg_interface *ha_cfg)
         lv_textarea_set_text(s_broker_password_textarea, ha_cfg->password);
     }
 
+    if (s_broker_ntp_server_textarea) {
+        lv_textarea_set_text(s_broker_ntp_server_textarea, ha_cfg->ntp_server);
+    }
+
     _refresh_identity_label(ha_cfg);
     _refresh_topic_preview();
 }
@@ -792,31 +853,41 @@ static void view_event_handler(void *handler_args, esp_event_base_t base,
 esp_err_t ha_cfg_get(ha_cfg_interface *ha_cfg)
 {
     memset(ha_cfg, 0, sizeof(ha_cfg_interface));
-    size_t len = sizeof(ha_cfg_interface);
-    esp_err_t err = indicator_nvs_read(MQTT_HA_CFG_STORAGE, ha_cfg, &len);
-    if (err == ESP_OK && len == sizeof(ha_cfg_interface)) {
-        ESP_LOGI(TAG, "mqtt broker cfg read successful");
-    } else {
-        /* Legacy blobs (written before device_name/topic_prefix existed) are
-         * HA_CFG_LEGACY_SIZE bytes. Re-read at the legacy size: the first four
-         * fields share the same layout and the tail stays zeroed, so the new
-         * fields fall through to the defaults below and the stored broker
-         * config survives the firmware upgrade. */
-        size_t legacy_len = HA_CFG_LEGACY_SIZE;
-        esp_err_t legacy_err = indicator_nvs_read(MQTT_HA_CFG_STORAGE, ha_cfg, &legacy_len);
-        if (legacy_err == ESP_OK && legacy_len == HA_CFG_LEGACY_SIZE) {
-            ESP_LOGI(TAG, "mqtt broker cfg uses legacy layout — new fields defaulted");
-            err = ESP_OK;
-        } else {
-            if (err == ESP_ERR_NVS_NOT_FOUND) {
-                ESP_LOGI(TAG, "mqtt broker cfg not find");
+
+    /* NVS blobs written by older firmware are shorter than the current
+     * struct. Try each known layout size, newest first; the buffer was zeroed
+     * above, so fields the old blob lacks stay "" and fall through to the
+     * defaults below. (nvs_get_blob fails with ESP_ERR_NVS_INVALID_LENGTH
+     * when the requested size does not match the stored blob.) */
+    static const size_t s_known_sizes[] = {
+        sizeof(ha_cfg_interface),   /* v3: + ntp_server */
+        HA_CFG_V2_SIZE,             /* v2: + device_name/topic_prefix */
+        HA_CFG_LEGACY_SIZE,         /* v1: broker_url/client_id/username/password */
+    };
+    esp_err_t err = ESP_ERR_NVS_NOT_FOUND;
+    for (size_t i = 0; i < sizeof(s_known_sizes) / sizeof(s_known_sizes[0]); i++) {
+        size_t len = s_known_sizes[i];
+        err = indicator_nvs_read(MQTT_HA_CFG_STORAGE, ha_cfg, &len);
+        if (err == ESP_OK && len == s_known_sizes[i]) {
+            if (s_known_sizes[i] != sizeof(ha_cfg_interface)) {
+                ESP_LOGI(TAG, "mqtt broker cfg uses older layout (%u bytes) — new fields defaulted",
+                         (unsigned)s_known_sizes[i]);
             } else {
-                ESP_LOGI(TAG, "mqtt broker cfg read err:%d", err);
+                ESP_LOGI(TAG, "mqtt broker cfg read successful");
             }
-            strlcpy(ha_cfg->broker_url, CONFIG_BROKER_URL, sizeof(ha_cfg->broker_url));
-            strlcpy(ha_cfg->username, CONFIG_MQTT_USERNAME, sizeof(ha_cfg->username));
-            strlcpy(ha_cfg->password, CONFIG_MQTT_PASSWORD, sizeof(ha_cfg->password));
+            break;
         }
+    }
+
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGI(TAG, "mqtt broker cfg not find");
+        } else {
+            ESP_LOGI(TAG, "mqtt broker cfg read err:%d", err);
+        }
+        strlcpy(ha_cfg->broker_url, CONFIG_BROKER_URL, sizeof(ha_cfg->broker_url));
+        strlcpy(ha_cfg->username, CONFIG_MQTT_USERNAME, sizeof(ha_cfg->username));
+        strlcpy(ha_cfg->password, CONFIG_MQTT_PASSWORD, sizeof(ha_cfg->password));
     }
 
     /* Fill-in defaults, shared by fresh and legacy configs. */
@@ -830,6 +901,9 @@ esp_err_t ha_cfg_get(ha_cfg_interface *ha_cfg)
      * was explicitly overridden (setmqtt -c). */
     if (ha_cfg->client_id[0] == '\0') {
         strlcpy(ha_cfg->client_id, ha_cfg->device_name, sizeof(ha_cfg->client_id));
+    }
+    if (ha_cfg->ntp_server[0] == '\0') {
+        strlcpy(ha_cfg->ntp_server, CONFIG_NTP_SERVER, sizeof(ha_cfg->ntp_server));
     }
     return err;
 }

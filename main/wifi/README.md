@@ -26,6 +26,24 @@ indicator_wifi_model_init()   ← called later from indicator_model_init()
   → posts VIEW_EVENT_SCREEN_START if no saved SSID
 ```
 
+## Network State Flags (`struct view_data_wifi_st`)
+
+Three flags with distinct meanings — do not conflate them:
+
+- `is_connected`: associated to the AP (no IP yet guaranteed).
+- `has_ip`: `IP_EVENT_STA_GOT_IP` received — the LAN is usable. UI/status
+  semantics only; it deliberately does NOT gate the MQTT client (esp-mqtt
+  auto-reconnect owns reconnection, so the client also retries on isolated
+  LANs with no internet).
+- `is_network`: internet reachable (periodic ping to hardcoded `1.1.1.1`).
+  UI/status semantics only; on isolated LANs it stays false forever and must
+  never gate local services.
+
+SNTP starts on first GOT_IP with the configured NTP server (NVS `ntp_server`,
+default `pool.ntp.org`; Settings → MQTT screen or `setmqtt -s`). On config
+change, `_mqtt_ha_start()` (ha_mqtt.c) re-applies the server to the running
+SNTP on every MQTT client (re)start.
+
 ## Event Flow
 
 ```

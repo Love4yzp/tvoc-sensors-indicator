@@ -24,7 +24,11 @@ enum start_screen {
 struct view_data_wifi_st {
     bool    is_connected;
     bool    is_connecting;
+    /* Internet reachable (ping 1.1.1.1 succeeded) — UI/status semantics only.
+     * NOT a valid gate for MQTT: the broker is usually on the LAN. */
     bool    is_network;
+    /* STA got an IP address — the real precondition for LAN services (MQTT). */
+    bool    has_ip;
     char    ssid[32];
     int8_t  rssi;
 };
